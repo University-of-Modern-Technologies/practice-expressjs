@@ -78,7 +78,11 @@ services:
       interval: 10s
       timeout: 3s
       retries: 5
-      start_period: 15s
+      # A first start on empty volumes populates the dependency volume before the
+      # process can serve anything, and that takes minutes rather than seconds.
+      # The window covers it, so a clean checkout comes up on the first attempt
+      # instead of failing and working on the retry.
+      start_period: 180s
     networks:
       - ntw
 
@@ -122,7 +126,11 @@ services:
       interval: 10s
       timeout: 3s
       retries: 5
-      start_period: 15s
+      # A first start on empty volumes populates the dependency volume before the
+      # process can serve anything, and that takes minutes rather than seconds.
+      # The window covers it, so a clean checkout comes up on the first attempt
+      # instead of failing and working on the retry.
+      start_period: 180s
     networks:
       - ntw
 
