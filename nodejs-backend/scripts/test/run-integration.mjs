@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import console from 'node:console';
+import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import process from 'node:process';
@@ -8,13 +9,15 @@ import { fileURLToPath, URL } from 'node:url';
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const require = createRequire(import.meta.url);
 const safeDatabaseName = /(^|[-_])(test|testing)([-_]|$)/i;
-const suites = [
-  'tests/integration/auth.integration.test.ts',
-  'tests/integration/contacts.integration.test.ts',
-  'tests/integration/deals.integration.test.ts',
-  'tests/integration/audit.integration.test.ts',
-  'tests/integration/canonical-flow.integration.test.ts',
-];
+// Read from disk rather than kept by hand: a suite that is written but not
+// listed does not fail, it simply never runs, and the summary says nothing
+// about it. The directory is the list.
+const suiteDirectory = 'tests/integration';
+const suites = fs
+  .readdirSync(path.join(projectRoot, suiteDirectory))
+  .filter((name) => name.endsWith('.integration.test.ts'))
+  .sort()
+  .map((name) => `${suiteDirectory}/${name}`);
 
 const commandExample = [
   "$env:RUN_DB_TESTS = 'true'",
