@@ -16,6 +16,7 @@
     "db:migrate": "npm run prisma -- migrate dev",
     "db:migrate:deploy": "npm run prisma -- migrate deploy",
     "db:seed": "tsx prisma/seed.ts",
+    "db:seed:demo": "tsx prisma/demo-seed.ts",
     "generate": "npm run prisma:generate",
     "migrate": "npm run db:migrate",
     "seed": "npm run db:seed",
