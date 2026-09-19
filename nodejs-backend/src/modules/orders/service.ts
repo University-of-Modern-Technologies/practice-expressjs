@@ -8,13 +8,8 @@ import {
 } from '../../common/types/domain-event-publisher.js';
 import type { Prisma, PrismaDatabase, PrismaTransaction } from '../../db/prisma.js';
 import type { AuditService } from '../audit/service.js';
-import {
-  ZERO_MONEY,
-  calculateLineTotal,
-  calculateOrderTotals,
-  normalizeMoney,
-  type OrderTotals,
-} from './money.js';
+import { ZERO_MONEY, normalizeMoney } from '../../common/money/index.js';
+import { calculateLineTotal, calculateOrderTotals, type OrderTotals } from './money.js';
 import {
   ORDER_STOCK_REFERENCE_TYPE,
   stockEffectForTransition,
