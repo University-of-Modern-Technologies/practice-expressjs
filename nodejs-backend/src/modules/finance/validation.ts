@@ -1,0 +1,140 @@
+import { z } from 'zod';
+import {
+  paymentMatchStatuses,
+  statementSortFields,
+  transactionDirections,
+  transactionSortFields,
+} from './types.js';
+
+const idParams = z.object({ id: z.string().uuid() });
+const timestamp = z.string().datetime({ offset: true });
+const version = z.coerce.number().int().positive();
+
+/**
+ * An amount is read as text and stays text. Coercing it to a number here would
+ * undo, in one line, the arithmetic care the rest of the module takes.
+ */
+const money = z
+  .string()
+  .trim()
+  .regex(/^\d{1,12}(?:\.\d{1,2})?$/, 'Invalid monetary amount');
+
+/** Widest window a summary may scan, so one request cannot table-scan years. */
+export const MAX_SUMMARY_RANGE_DAYS = 366;
+/** Window applied when the caller does not name one. */
+export const DEFAULT_SUMMARY_RANGE_DAYS = 30;
+
+const DAY_MS = 86_400_000;
+
+export const listStatementsSchema = z.object({
+  query: z.object({
+    page: z.coerce.number().int().min(1).default(1),
+    pageSize: z.coerce.number().int().min(1).max(100).default(20),
+    search: z.string().trim().min(1).max(160).optional(),
+    sortBy: z.enum(statementSortFields).default('periodStart'),
+    sortOrder: z.enum(['asc', 'desc']).default('desc'),
+  }),
+});
+
+/**
+ * Import takes no parameters: which statement is pulled is the bank's
+ * business. Anything a caller sends is dropped rather than honoured, so a
+ * client cannot steer the import by hand.
+ */
+export const importStatementSchema = z.object({ body: z.object({}).optional() });
+
+export const listTransactionsSchema = z.object({
+  query: z
+    .object({
+      page: z.coerce.number().int().min(1).default(1),
+      pageSize: z.coerce.number().int().min(1).max(100).default(20),
+      search: z.string().trim().min(1).max(160).optional(),
+      statementId: z.string().uuid().optional(),
+      matchStatus: z.enum(paymentMatchStatuses).optional(),
+      direction: z.enum(transactionDirections).optional(),
+      bookedFrom: timestamp.optional(),
+      bookedTo: timestamp.optional(),
+      minAmount: money.optional(),
+      maxAmount: money.optional(),
+      sortBy: z.enum(transactionSortFields).default('bookedAt'),
+      sortOrder: z.enum(['asc', 'desc']).default('desc'),
+    })
+    .refine(
+      (value) =>
+        value.bookedFrom === undefined ||
+        value.bookedTo === undefined ||
+        Date.parse(value.bookedFrom) <= Date.parse(value.bookedTo),
+      { message: 'bookedFrom must not be later than bookedTo', path: ['bookedFrom'] },
+    )
+    // Compared as text of equal scale would be wrong for `9.99` against
+    // `10.00`, so the bounds are compared as numbers — a comparison, never an
+    // arithmetic step, and never a value that is stored.
+    .refine(
+      (value) =>
+        value.minAmount === undefined ||
+        value.maxAmount === undefined ||
+        Number(value.minAmount) <= Number(value.maxAmount),
+      { message: 'minAmount must not exceed maxAmount', path: ['minAmount'] },
+    ),
+});
+
+export const getTransactionSchema = z.object({ params: idParams });
+
+/**
+ * Matching by hand is an override: a person has seen the statement and the
+ * order and says they belong together. The order is named explicitly, and the
+ * version is what stops two people from overriding each other blindly.
+ */
+export const matchTransactionSchema = z.object({
+  params: idParams,
+  body: z.object({ version, orderId: z.string().uuid() }),
+});
+
+/** Unmatching carries the version in the query, as every other delete does. */
+export const unmatchTransactionSchema = z.object({
+  params: idParams,
+  query: z.object({ version }),
+});
+
+/** Reconciliation takes no parameters either; it examines what is pending. */
+export const reconcileSchema = z.object({ body: z.object({}).optional() });
+
+const isoInstant = z
+  .string()
+  .trim()
+  .min(1)
+  .refine((value) => !Number.isNaN(Date.parse(value)), {
+    message: 'Expected an ISO 8601 date or timestamp',
+  })
+  .transform((value) => new Date(value).toISOString());
+
+interface RangeInput {
+  readonly from?: string | undefined;
+  readonly to?: string | undefined;
+}
+
+// `to` defaults to now and `from` to a fixed window before it, so a caller may
+// send neither, either, or both.
+const applyRangeDefaults = <T extends RangeInput>(value: T): T & { from: string; to: string } => {
+  const to = value.to ?? new Date().toISOString();
+  const from =
+    value.from ?? new Date(Date.parse(to) - DEFAULT_SUMMARY_RANGE_DAYS * DAY_MS).toISOString();
+  return { ...value, from, to };
+};
+
+export const financeSummarySchema = z.object({
+  query: z
+    .object({ from: isoInstant.optional(), to: isoInstant.optional() })
+    .transform(applyRangeDefaults)
+    .refine((value) => Date.parse(value.from) < Date.parse(value.to), {
+      message: 'from must be earlier than to',
+      path: ['from'],
+    })
+    .refine(
+      (value) => Date.parse(value.to) - Date.parse(value.from) <= MAX_SUMMARY_RANGE_DAYS * DAY_MS,
+      {
+        message: `The date range must not exceed ${MAX_SUMMARY_RANGE_DAYS} days`,
+        path: ['from'],
+      },
+    ),
+});

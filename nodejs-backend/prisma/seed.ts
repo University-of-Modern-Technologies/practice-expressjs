@@ -81,7 +81,6 @@ const permissionDefinitions = [
   ['calls:delete', 'Soft-delete calls'],
   ['finance:read', 'View bank statements and transactions'],
   ['finance:write', 'Import statements and reconcile payments'],
-  ['finance:delete', 'Remove reconciliation records'],
 ] as const;
 
 const roleDefinitions = [

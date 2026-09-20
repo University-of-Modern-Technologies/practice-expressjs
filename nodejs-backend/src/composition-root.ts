@@ -67,6 +67,12 @@ import {
   createDealsService,
 } from './modules/deals/index.js';
 import {
+  createFinanceController,
+  createFinanceRouter,
+  createFinanceService,
+  createStubBankProvider,
+} from './modules/finance/index.js';
+import {
   createHelpdeskController,
   createHelpdeskRouter,
   createHelpdeskService,
@@ -293,6 +299,10 @@ const createModules = ({
     ),
     rbacService,
   );
+  const financeController = createFinanceController(
+    createFinanceService(prisma, auditService, createStubBankProvider(), publisher),
+    rbacService,
+  );
   const helpdeskController = createHelpdeskController(
     createHelpdeskService(prisma, auditService, publisher),
     rbacService,
@@ -364,6 +374,7 @@ const createModules = ({
       { path: '/api/v1/audit', router: createAuditRouter(auditController, authenticate) },
       { path: '/api/v1/helpdesk', router: createHelpdeskRouter(helpdeskController, authenticate) },
       { path: '/api/v1/calls', router: createCallsRouter(callsController, authenticate) },
+      { path: '/api/v1/finance', router: createFinanceRouter(financeController, authenticate) },
       { path: '/api/v1/products', router: createProductsRouter(productsController, authenticate) },
       { path: '/api/v1/orders', router: createOrdersRouter(ordersController, authenticate) },
       {

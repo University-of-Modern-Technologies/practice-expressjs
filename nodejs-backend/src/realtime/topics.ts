@@ -21,6 +21,7 @@ export const realtimeEntityTypes = [
   'ticket',
   'call',
   'transaction',
+  'statement',
 ] as const;
 
 export type RealtimeEntityType = (typeof realtimeEntityTypes)[number];
@@ -129,6 +130,7 @@ const ENTITY_TYPE_RESOURCES: Readonly<Record<RealtimeEntityType, string>> = {
   ticket: 'helpdesk',
   call: 'calls',
   transaction: 'finance',
+  statement: 'finance',
 };
 
 /**
