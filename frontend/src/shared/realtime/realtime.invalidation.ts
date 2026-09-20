@@ -1,4 +1,5 @@
 import { auditKeys } from '@/app/(auth)/audit/audit.queries';
+import { callsKeys } from '@/app/(auth)/calls/calls.queries';
 import { contactsKeys } from '@/app/(auth)/contacts/contacts.queries';
 import { dealsKeys } from '@/app/(auth)/deals/deals.queries';
 import { helpdeskKeys } from '@/app/(auth)/helpdesk/helpdesk.queries';
@@ -73,6 +74,11 @@ const RESOLVERS: Readonly<Record<string, EventKeyResolver>> = {
   'order.item_removed': (event) => orderKeys(event.entityId),
   'order.status_transitioned': (event) => orderWithStockKeys(event.entityId),
   'order.deleted': (event) => orderWithStockKeys(event.entityId),
+
+  'call.created': () => [callsKeys.lists()],
+  'call.updated': (event) => [callsKeys.detail(event.entityId), callsKeys.lists()],
+  'call.linked': (event) => [callsKeys.detail(event.entityId), callsKeys.lists()],
+  'call.deleted': (event) => [callsKeys.detail(event.entityId), callsKeys.lists()],
 
   'ticket.created': () => [helpdeskKeys.lists()],
   'ticket.updated': (event) => [helpdeskKeys.detail(event.entityId), helpdeskKeys.lists()],
