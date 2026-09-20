@@ -40,6 +40,10 @@ const baseTestConfig: AppConfig = {
   aiMaxTokens: 400,
   aiMaxInputChars: 4_000,
   aiCacheTtlSeconds: 300,
+  callProviderTimeoutMs: 5_000,
+  callProviderMaxAttempts: 3,
+  callProviderBackoffMs: 200,
+  callSyncBatchSize: 100,
 };
 
 export const createTestConfig = (overrides: Partial<AppConfig> = {}): AppConfig => ({
