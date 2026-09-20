@@ -224,7 +224,7 @@ ALTER TABLE "bank_transactions" ADD CONSTRAINT "bank_transactions_matched_by_id_
 ALTER TABLE "tickets" ADD CONSTRAINT "tickets_subject_nonempty_check" CHECK (btrim("subject") <> '');
 ALTER TABLE "tickets" ADD CONSTRAINT "tickets_number_nonempty_check" CHECK (btrim("number") <> '');
 ALTER TABLE "tickets" ADD CONSTRAINT "tickets_version_positive_check" CHECK ("version" > 0);
-ALTER TABLE "tickets" ADD CONSTRAINT "tickets_resolved_at_consistency_check" CHECK (("status" IN ('RESOLVED', 'CLOSED') AND "resolved_at" IS NOT NULL) OR ("status" NOT IN ('RESOLVED', 'CLOSED') AND "resolved_at" IS NULL));
+ALTER TABLE "tickets" ADD CONSTRAINT "tickets_resolved_at_consistency_check" CHECK (("status" = 'RESOLVED' AND "resolved_at" IS NOT NULL) OR ("status" IN ('NEW', 'OPEN', 'PENDING') AND "resolved_at" IS NULL) OR "status" = 'CLOSED');
 ALTER TABLE "tickets" ADD CONSTRAINT "tickets_resolved_at_check" CHECK ("resolved_at" IS NULL OR "resolved_at" >= "opened_at");
 ALTER TABLE "tickets" ADD CONSTRAINT "tickets_deleted_at_check" CHECK ("deleted_at" IS NULL OR "deleted_at" >= "created_at");
 ALTER TABLE "ticket_status_logs" ADD CONSTRAINT "ticket_status_logs_status_changed_check" CHECK ("from_status" IS NULL OR "from_status" <> "to_status");
