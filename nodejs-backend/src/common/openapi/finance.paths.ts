@@ -86,8 +86,8 @@ const transactionSchema = {
       nullable: true,
       description: 'Заповнене тоді й лише тоді, коли matchStatus = MATCHED.',
     },
-    matchedById: { type: 'string', format: 'uuid', nullable: true },
     matchedAt: { ...timestampSchema, nullable: true },
+    matchedById: { type: 'string', format: 'uuid', nullable: true },
     version: versionSchema,
     createdAt: timestampSchema,
     updatedAt: timestampSchema,
@@ -96,7 +96,7 @@ const transactionSchema = {
 
 const candidateSchema = {
   type: 'object',
-  required: ['orderId', 'orderNumber', 'status', 'total', 'currency', 'createdAt'],
+  required: ['orderId', 'orderNumber', 'status', 'total', 'currency', 'placedAt'],
   properties: {
     orderId: { type: 'string', format: 'uuid' },
     orderNumber: { type: 'string', maxLength: 32 },
@@ -104,7 +104,7 @@ const candidateSchema = {
     total: moneySchema,
     currency: currencySchema,
     contactId: { type: 'string', format: 'uuid', nullable: true },
-    createdAt: timestampSchema,
+    placedAt: { ...timestampSchema, nullable: true },
   },
 };
 
@@ -133,38 +133,33 @@ const importResultSchema = {
 
 const reconcileResultSchema = {
   type: 'object',
-  required: ['examined', 'matched', 'suggested', 'unmatched'],
+  required: ['examined', 'matched', 'suggested', 'unmatched', 'ignored'],
   properties: {
     examined: { type: 'integer', minimum: 0 },
     matched: { type: 'integer', minimum: 0 },
     suggested: { type: 'integer', minimum: 0 },
     unmatched: { type: 'integer', minimum: 0 },
+    ignored: { type: 'integer', minimum: 0 },
   },
 };
 
 const summarySchema = {
   type: 'object',
-  required: ['from', 'to', 'totals', 'byStatus'],
+  required: ['from', 'to', 'transactionCount', 'inflow', 'outflow', 'net', 'statuses'],
   properties: {
     from: timestampSchema,
     to: timestampSchema,
-    totals: {
-      type: 'object',
-      required: ['transactionCount', 'inflow', 'outflow', 'net'],
-      properties: {
-        transactionCount: { type: 'integer', minimum: 0 },
-        inflow: moneySchema,
-        outflow: moneySchema,
-        net: signedMoneySchema,
-      },
-    },
-    byStatus: {
+    transactionCount: { type: 'integer', minimum: 0 },
+    inflow: moneySchema,
+    outflow: moneySchema,
+    net: signedMoneySchema,
+    statuses: {
       type: 'array',
       items: {
         type: 'object',
-        required: ['matchStatus', 'count', 'amount', 'share'],
+        required: ['status', 'count', 'amount', 'share'],
         properties: {
-          matchStatus: matchStatusSchema,
+          status: matchStatusSchema,
           count: { type: 'integer', minimum: 0 },
           amount: moneySchema,
           share: { type: 'number', minimum: 0, maximum: 1 },

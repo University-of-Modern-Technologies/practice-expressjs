@@ -22,21 +22,26 @@ import type { TransactionDirection } from './types.js';
  * |---|---|
  * | 1–3 | the reference quotes the order number and the amount is exact |
  * | 4 | the amount is a cent short — the tolerance, and only the tolerance |
- * | 5 | no reference at all; the payer's name carries the match |
+ * | 5 | no reference at all; the payer's personal name carries the match |
  * | 6 | an amount belonging to no order — the ordinary unmatched case |
- * | 7–8 | one amount, two possible orders — a question, not an answer |
+ * | 7–8 | one customer, one amount, two open orders — a question, not an answer |
  * | 9–11 | money going out, which reconciliation does not consider |
  * | 12 | a payment far outside the window — the window's only witness |
+ *
+ * Every date here is absolute, and so is every date in the orders these rows
+ * are meant to meet. Nothing is computed from "today": the same checkout run
+ * six months from now imports the same statement and reconciles to the same
+ * five matches, two suggestions, two unmatched rows and three ignored ones.
  */
 
 /** Identifier of the one statement the stub knows about. */
-export const STUB_STATEMENT_EXTERNAL_ID = 'stub-stmt-2026-01';
+export const STUB_STATEMENT_EXTERNAL_ID = 'stub-stmt-2026-03';
 
 /** How many transactions that statement carries. */
 export const STUB_TRANSACTION_COUNT = 12;
 
 /** Booking time of the first transaction. Fixed, so runs are reproducible. */
-const ANCHOR_ISO = '2026-01-05T10:00:00.000Z';
+const ANCHOR_ISO = '2026-03-02T10:00:00.000Z';
 
 /** Spacing between consecutive transactions. */
 const STEP_DAYS = 2;
@@ -69,91 +74,104 @@ const ROWS: readonly StubRow[] = [
     amount: '2400.00',
     counterpartyName: 'Cedar Labs',
     counterpartyAccount: 'ACCT-1002',
-    reference: 'Invoice settled, ORD-2026-0002',
+    reference: 'ORD-2026-0004 settled',
   },
   {
     direction: 'CREDIT',
     amount: '450.00',
     counterpartyName: 'Blue Peak Studio',
     counterpartyAccount: 'ACCT-1003',
-    reference: 'ORD-2026-0003 remittance',
+    reference: 'Remittance for ORD-2026-0005',
   },
   {
-    // A cent short of 1800.00: banks round transfer fees, and a payment that
-    // is off by one cent is the same payment.
+    // A cent short of 1250.00: the bank kept a transfer fee, and a payment
+    // that is off by one cent is the same payment.
     direction: 'CREDIT',
-    amount: '1799.99',
+    amount: '1249.99',
     counterpartyName: 'Northwind Workshop',
-    counterpartyAccount: 'ACCT-1001',
-    reference: 'Order ORD-2026-0004, net of transfer fee',
+    counterpartyAccount: 'ACCT-1004',
+    reference: 'Order ORD-2026-0006, net of transfer fee',
   },
   {
-    // No reference to speak of; the payer's name is the whole evidence.
+    // No reference to speak of; the payer's name is the whole evidence, and
+    // here it is the person rather than the company.
     direction: 'CREDIT',
-    amount: '1800.00',
-    counterpartyName: 'Alex North',
+    amount: '777.00',
+    counterpartyName: 'Jordan Blue',
     counterpartyAccount: null,
     reference: 'Wire transfer',
   },
   {
     direction: 'CREDIT',
-    amount: '77.15',
+    amount: '66.00',
     counterpartyName: 'Unknown Payer',
     counterpartyAccount: null,
     reference: 'General deposit',
   },
   {
+    // Same customer, same amount, two orders open for it. Neither row below
+    // can be settled without a person deciding which order was paid.
     direction: 'CREDIT',
-    amount: '980.00',
-    counterpartyName: 'Acme Holdings',
+    amount: '990.00',
+    counterpartyName: 'Cedar Labs',
     counterpartyAccount: 'ACCT-1007',
     reference: 'Bank transfer',
   },
   {
     direction: 'CREDIT',
-    amount: '980.00',
-    counterpartyName: 'Acme Holdings',
-    counterpartyAccount: 'ACCT-1007',
+    amount: '990.00',
+    counterpartyName: 'Cedar Labs',
+    counterpartyAccount: 'ACCT-1008',
     reference: 'Bank transfer',
   },
   {
     direction: 'DEBIT',
     amount: '3200.00',
     counterpartyName: 'City Property Management',
-    counterpartyAccount: 'ACCT-2001',
-    reference: 'Office rent, January',
+    counterpartyAccount: 'ACCT-1009',
+    reference: 'Office rent, February',
   },
   {
     direction: 'DEBIT',
     amount: '5400.00',
     counterpartyName: 'Payroll Services Ltd',
-    counterpartyAccount: 'ACCT-2002',
-    reference: 'Payroll, January',
+    counterpartyAccount: 'ACCT-1010',
+    reference: 'Payroll, February',
   },
   {
     direction: 'DEBIT',
     amount: '640.00',
     counterpartyName: 'Cloud Hosting Inc',
-    counterpartyAccount: 'ACCT-2003',
-    reference: 'Hosting and services, January',
+    counterpartyAccount: 'ACCT-1011',
+    reference: 'Hosting and services',
   },
   {
     // Quotes an order number, agrees on the amount, and is still not a match:
-    // the order it names is created four months after this money arrived.
-    // Without this row the ninety-day window is written but never exercised.
+    // the order it names was placed almost half a year before this money
+    // arrived. Without this row the ninety-day window is never exercised.
     direction: 'CREDIT',
-    amount: '1250.00',
-    counterpartyName: 'Late Payer LLC',
+    amount: '1500.00',
+    counterpartyName: 'Northwind Workshop',
     counterpartyAccount: 'ACCT-1012',
-    reference: 'Payment for order ORD-2026-0012',
+    reference: 'Payment for order ORD-2025-0099',
   },
 ];
 
 const bookedAtFor = (index: number): string =>
   new Date(Date.parse(ANCHOR_ISO) + index * STEP_DAYS * DAY_MS).toISOString();
 
+/**
+ * The period is part of the identifier, not decoration.
+ *
+ * Import is idempotent by external id, which is what stops a second pull from
+ * filing the same payment twice. The same property means that a fixture whose
+ * *contents* change while its ids stay the same is invisible to any database
+ * that already holds the old rows: the import reports twelve skipped and the
+ * ledger keeps yesterday's data for ever. Naming the period makes a revised
+ * statement a different statement, which is what it is.
+ */
 const externalIdFor = (index: number): string =>
-  `stub-txn-${(index + 1).toString().padStart(4, '0')}`;
+  `stub-txn-2026-03-${(index + 1).toString().padStart(4, '0')}`;
 
 const transactionFor = (row: StubRow, index: number): BankProviderTransaction => ({
   externalId: externalIdFor(index),
@@ -187,8 +205,8 @@ export const buildStubStatement = (): BankProviderStatement => {
   return {
     externalId: STUB_STATEMENT_EXTERNAL_ID,
     accountLabel: 'Operating account',
-    periodStart: '2026-01-01',
-    periodEnd: '2026-01-31',
+    periodStart: '2026-03-01',
+    periodEnd: '2026-03-31',
     openingBalance: OPENING_BALANCE,
     closingBalance: closingBalanceFor(transactions),
     currency: CURRENCY,

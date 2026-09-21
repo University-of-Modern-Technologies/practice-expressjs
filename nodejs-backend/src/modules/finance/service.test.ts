@@ -53,12 +53,13 @@ interface OrderRow {
   currency: string;
   total: string;
   contactId: string | null;
-  createdAt: Date;
-  contact: { firstName: string; lastName: string } | null;
+  placedAt: Date | null;
+  contact: { firstName: string; lastName: string; company: string | null } | null;
 }
 
 // `10000` rather than `10000.00`: this is how Postgres hands a Decimal(14,2)
-// back, and putting the scale on again is the service's job.
+// back, and it is also what leaves on the wire — the shortest exact string,
+// the same shape every other monetary field in this API uses.
 const statementRow: StatementRow = {
   id: 'stmt-1',
   externalId: 'stub-stmt-2026-01',
@@ -110,8 +111,8 @@ const orderRow: OrderRow = {
   currency: 'USD',
   total: '1800',
   contactId: 'contact-1',
-  createdAt: new Date('2026-01-02T09:00:00.000Z'),
-  contact: { firstName: 'Alex', lastName: 'North' },
+  placedAt: new Date('2026-01-02T09:00:00.000Z'),
+  contact: { firstName: 'Alex', lastName: 'North', company: 'Northwind Workshop' },
 };
 
 const stubStatement = buildStubStatement();
@@ -128,6 +129,7 @@ interface HarnessOptions {
   readonly provider?: BankProvider;
   readonly byDirection?: readonly unknown[];
   readonly byStatus?: readonly unknown[];
+  readonly latestStatement?: StatementRow | null;
 }
 
 const createHarness = (options: HarnessOptions = {}) => {
@@ -169,6 +171,9 @@ const createHarness = (options: HarnessOptions = {}) => {
   const findOrders = jest.fn(async (_args: unknown) => options.orders ?? [orderRow]);
   const findTransactions = jest.fn(async (_args: unknown) => options.pending ?? [unmatchedRow]);
   const findStatements = jest.fn(async (_args: unknown) => [statementRow]);
+  const latestStatement = jest.fn(async (_args: unknown) =>
+    options.latestStatement === undefined ? statementRow : options.latestStatement,
+  );
   const groupBy = jest.fn(async (args: unknown) => {
     const { by } = args as { by: readonly string[] };
     return by[0] === 'direction'
@@ -193,7 +198,11 @@ const createHarness = (options: HarnessOptions = {}) => {
     auditLog: { create: jest.fn() },
   };
   const db = {
-    bankStatement: { findMany: findStatements, count: jest.fn(async () => 1) },
+    bankStatement: {
+      findMany: findStatements,
+      count: jest.fn(async () => 1),
+      findFirst: latestStatement,
+    },
     bankTransaction: {
       findFirst: readTransaction,
       findMany: findTransactions,
@@ -243,17 +252,17 @@ const transactionQuery = {
 };
 
 describe('finance service money on the wire', () => {
-  it('renders every amount at full scale, whatever the column returns', async () => {
+  it('renders every amount as the shortest exact string, as the rest of the API does', async () => {
     const harness = createHarness();
 
     const statements = await harness.service.listStatements(access, statementQuery);
     const transactions = await harness.service.listTransactions(access, transactionQuery);
 
     expect(statements.items[0]).toMatchObject({
-      openingBalance: '10000.00',
+      openingBalance: '10000',
       closingBalance: '12297.14',
     });
-    expect(transactions.items[0]?.amount).toBe('1800.00');
+    expect(transactions.items[0]?.amount).toBe('1800');
   });
 });
 
@@ -270,7 +279,10 @@ describe('finance service statement import', () => {
     expect(harness.transactionCreate).toHaveBeenCalledTimes(stubStatement.transactions.length);
     expect(harness.transactionCreate).toHaveBeenCalledWith(
       expect.objectContaining({
-        data: expect.objectContaining({ externalId: 'stub-txn-0001', matchStatus: 'UNMATCHED' }),
+        data: expect.objectContaining({
+          externalId: 'stub-txn-2026-03-0001',
+          matchStatus: 'UNMATCHED',
+        }),
       }),
     );
   });
@@ -298,7 +310,9 @@ describe('finance service statement import', () => {
   });
 
   it('keeps importing the lines around one it already knows', async () => {
-    const harness = createHarness({ storedExternalIds: ['stub-txn-0001', 'stub-txn-0002'] });
+    const harness = createHarness({
+      storedExternalIds: ['stub-txn-2026-03-0001', 'stub-txn-2026-03-0002'],
+    });
 
     await expect(harness.service.importStatement(access)).resolves.toEqual({
       statementId: statementRow.id,
@@ -397,15 +411,15 @@ describe('finance service single transaction', () => {
     const open = createHarness({
       existing: { ...unmatchedRow, matchStatus: 'SUGGESTED', reference: 'Bank transfer' },
       orders: [
-        { ...orderRow, contact: { firstName: 'Northwind', lastName: 'Workshop' } },
-        { ...twin, contact: { firstName: 'Northwind', lastName: 'Workshop' } },
+        { ...orderRow, contact: { firstName: 'Northwind', lastName: 'Workshop', company: null } },
+        { ...twin, contact: { firstName: 'Northwind', lastName: 'Workshop', company: null } },
       ],
     });
 
     const result = await open.service.getTransactionById(access, unmatchedRow.id);
 
     expect(result.candidates).toHaveLength(2);
-    expect(result.candidates[0]).toMatchObject({ orderId: 'order-1', total: '1800.00' });
+    expect(result.candidates[0]).toMatchObject({ orderId: 'order-1', total: '1800' });
   });
 
   it('reports a transaction nobody stored as not found', async () => {
@@ -570,6 +584,7 @@ describe('finance service reconciliation', () => {
       matched: 1,
       suggested: 0,
       unmatched: 0,
+      ignored: 0,
     });
     expect(harness.updateTransaction).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -585,12 +600,12 @@ describe('finance service reconciliation', () => {
     const harness = createHarness({
       pending: [{ ...unmatchedRow, reference: 'Bank transfer' }],
       orders: [
-        { ...orderRow, contact: { firstName: 'Northwind', lastName: 'Workshop' } },
+        { ...orderRow, contact: { firstName: 'Northwind', lastName: 'Workshop', company: null } },
         {
           ...orderRow,
           id: 'order-2',
           orderNumber: 'ORD-2026-0007',
-          contact: { firstName: 'Northwind', lastName: 'Workshop' },
+          contact: { firstName: 'Northwind', lastName: 'Workshop', company: null },
         },
       ],
     });
@@ -600,6 +615,7 @@ describe('finance service reconciliation', () => {
       matched: 0,
       suggested: 1,
       unmatched: 0,
+      ignored: 0,
     });
     expect(harness.updateTransaction).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -609,19 +625,26 @@ describe('finance service reconciliation', () => {
     );
   });
 
-  it('leaves money that is going out exactly where it is', async () => {
+  it('files money that is going out rather than leaving it undecided', async () => {
     const harness = createHarness({
-      pending: [{ ...unmatchedRow, direction: 'DEBIT', reference: 'Office rent, January' }],
+      pending: [{ ...unmatchedRow, direction: 'DEBIT', reference: 'Office rent, February' }],
     });
 
     await expect(harness.service.reconcile(access)).resolves.toEqual({
       examined: 1,
       matched: 0,
       suggested: 0,
-      unmatched: 1,
+      unmatched: 0,
+      ignored: 1,
     });
-    // Already unmatched and still unmatched: nothing to write, nothing to say.
-    expect(harness.updateTransaction).not.toHaveBeenCalled();
+    // The rule never runs over it, but the outcome is recorded: rent is a real
+    // movement that no order will explain, and IGNORED says exactly that.
+    expect(harness.updateTransaction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: { matchStatus: 'IGNORED', version: { increment: 1 } },
+      }),
+    );
+    // Filing is not a decision about an order, so nothing is announced.
     expect(harness.record).not.toHaveBeenCalled();
   });
 
@@ -633,6 +656,7 @@ describe('finance service reconciliation', () => {
     expect(harness.findTransactions).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { matchStatus: { in: ['UNMATCHED', 'SUGGESTED'] } },
+        take: 200,
       }),
     );
   });
@@ -651,6 +675,7 @@ describe('finance service reconciliation', () => {
       matched: 2,
       suggested: 0,
       unmatched: 0,
+      ignored: 0,
     });
     // The decision stands for both, but only the row that held still was
     // written and announced; the other is picked up by the next run.
@@ -665,6 +690,7 @@ describe('finance service reconciliation', () => {
       matched: 0,
       suggested: 0,
       unmatched: 0,
+      ignored: 0,
     });
     expect(harness.findOrders).not.toHaveBeenCalled();
   });
@@ -679,26 +705,63 @@ describe('finance service summary', () => {
       to: '2026-02-01T00:00:00.000Z',
     });
 
-    expect(report.totals).toEqual({
-      transactionCount: 12,
-      inflow: '11537.14',
-      outflow: '9240.00',
-      // The one figure in this module that may be negative.
-      net: '2297.14',
-    });
-    expect(report.byStatus).toHaveLength(4);
-    expect(report.byStatus).toContainEqual({
-      matchStatus: 'UNMATCHED',
+    expect(report.transactionCount).toBe(12);
+    expect(report.inflow).toBe('11537.14');
+    expect(report.outflow).toBe('9240.00');
+    // The one figure in this module that may be negative.
+    expect(report.net).toBe('2297.14');
+    expect(report.statuses).toHaveLength(4);
+    expect(report.statuses).toContainEqual({
+      status: 'UNMATCHED',
       count: 12,
       amount: '20777.14',
       share: 1,
     });
-    expect(report.byStatus).toContainEqual({
-      matchStatus: 'MATCHED',
+    expect(report.statuses).toContainEqual({
+      status: 'MATCHED',
       count: 0,
       amount: '0.00',
       share: 0,
     });
+  });
+
+  /*
+   * The requirement this was written for: nothing in this module may depend on
+   * the day it is run. A window defaulted to "the last thirty days" makes a
+   * ledger of March report an empty period from July onwards, and the module
+   * looks broken while behaving correctly.
+   */
+  it('takes its default window from the newest statement, not from the clock', async () => {
+    const harness = createHarness();
+
+    const report = await harness.service.summary(access, {});
+
+    expect(report.from).toBe('2026-01-01T00:00:00.000Z');
+    // The period ends on the 31st inclusive; the window is half-open, so it
+    // closes at the midnight after it.
+    expect(report.to).toBe('2026-02-01T00:00:00.000Z');
+  });
+
+  it('keeps the window the caller named, statement or no statement', async () => {
+    const harness = createHarness();
+
+    const report = await harness.service.summary(access, {
+      from: '2026-03-01T00:00:00.000Z',
+      to: '2026-04-01T00:00:00.000Z',
+    });
+
+    expect(report.from).toBe('2026-03-01T00:00:00.000Z');
+    expect(report.to).toBe('2026-04-01T00:00:00.000Z');
+  });
+
+  it('falls back to the recent past only when nothing has been imported', async () => {
+    const harness = createHarness({ latestStatement: null });
+
+    const report = await harness.service.summary(access, {});
+
+    // Whatever the window, the answer is empty; the fallback settles only what
+    // the report says it looked at.
+    expect(Date.parse(report.from)).toBeLessThan(Date.parse(report.to));
   });
 
   it('reports an empty period as zeroes rather than as nothing', async () => {
@@ -709,13 +772,11 @@ describe('finance service summary', () => {
       to: '2026-02-01T00:00:00.000Z',
     });
 
-    expect(report.totals).toEqual({
-      transactionCount: 0,
-      inflow: '0.00',
-      outflow: '0.00',
-      net: '0.00',
-    });
-    expect(report.byStatus.every((row) => row.count === 0 && row.share === 0)).toBe(true);
+    expect(report.transactionCount).toBe(0);
+    expect(report.inflow).toBe('0.00');
+    expect(report.outflow).toBe('0.00');
+    expect(report.net).toBe('0.00');
+    expect(report.statuses.every((row) => row.count === 0 && row.share === 0)).toBe(true);
   });
 });
 

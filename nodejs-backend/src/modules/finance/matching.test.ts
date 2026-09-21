@@ -6,7 +6,7 @@ import {
   MATCH_WINDOW_DAYS,
   amountsAgree,
   bookedWithinWindow,
-  candidateCreationWindow,
+  candidatePlacementWindow,
   counterpartyMatchesContact,
   findMatchCandidates,
   isMatchCandidate,
@@ -18,15 +18,16 @@ import {
 
 const DAY_MS = 86_400_000;
 
-const orderCreatedAt = new Date('2026-01-02T09:00:00.000Z');
+const orderPlacedAt = new Date('2026-01-02T09:00:00.000Z');
 
 const order: MatchableOrder = {
   orderId: 'order-1',
   orderNumber: 'ORD-2026-0001',
   status: 'CONFIRMED',
   total: '1800.00',
-  createdAt: orderCreatedAt,
+  placedAt: orderPlacedAt,
   contactName: 'Alex North',
+  contactCompany: 'Northwind Workshop',
 };
 
 const payment: MatchableTransaction = {
@@ -65,21 +66,21 @@ describe('reconciliation conditions', () => {
 
   it('opens the window at the order and shuts it ninety days later', () => {
     expect(MATCH_WINDOW_DAYS).toBe(90);
-    expect(bookedWithinWindow(orderCreatedAt, orderCreatedAt)).toBe(true);
+    expect(bookedWithinWindow(orderPlacedAt, orderPlacedAt)).toBe(true);
     expect(
       bookedWithinWindow(
-        new Date(orderCreatedAt.getTime() + MATCH_WINDOW_DAYS * DAY_MS),
-        orderCreatedAt,
+        new Date(orderPlacedAt.getTime() + MATCH_WINDOW_DAYS * DAY_MS),
+        orderPlacedAt,
       ),
     ).toBe(true);
     expect(
       bookedWithinWindow(
-        new Date(orderCreatedAt.getTime() + (MATCH_WINDOW_DAYS + 1) * DAY_MS),
-        orderCreatedAt,
+        new Date(orderPlacedAt.getTime() + (MATCH_WINDOW_DAYS + 1) * DAY_MS),
+        orderPlacedAt,
       ),
     ).toBe(false);
     // Money cannot arrive for an order that does not exist yet.
-    expect(bookedWithinWindow(new Date(orderCreatedAt.getTime() - 1), orderCreatedAt)).toBe(false);
+    expect(bookedWithinWindow(new Date(orderPlacedAt.getTime() - 1), orderPlacedAt)).toBe(false);
   });
 
   it('requires an order that is actually waiting for money', () => {
@@ -95,7 +96,14 @@ describe('reconciliation conditions', () => {
   it('needs all four conditions, not three of them', () => {
     expect(isMatchCandidate(payment, order)).toBe(true);
     expect(isMatchCandidate({ ...payment, amount: '1700.00' }, order)).toBe(false);
-    expect(isMatchCandidate({ ...payment, reference: 'General deposit' }, order)).toBe(false);
+    expect(
+      // Both halves of condition 2 have to fail: no number in the reference
+      // and a payer who is neither the person nor the company.
+      isMatchCandidate(
+        { ...payment, reference: 'General deposit', counterpartyName: 'Unknown Payer' },
+        order,
+      ),
+    ).toBe(false);
     expect(
       isMatchCandidate({ ...payment, bookedAt: new Date('2026-06-01T00:00:00.000Z') }, order),
     ).toBe(false);
@@ -149,13 +157,13 @@ describe('candidate creation window', () => {
     const early = new Date('2026-01-05T10:00:00.000Z');
     const late = new Date('2026-01-27T10:00:00.000Z');
 
-    expect(candidateCreationWindow([late, early])).toEqual({
+    expect(candidatePlacementWindow([late, early])).toEqual({
       from: new Date(early.getTime() - MATCH_WINDOW_DAYS * DAY_MS),
       to: late,
     });
   });
 
   it('has nothing to span when there is nothing to reconcile', () => {
-    expect(candidateCreationWindow([])).toBeNull();
+    expect(candidatePlacementWindow([])).toBeNull();
   });
 });

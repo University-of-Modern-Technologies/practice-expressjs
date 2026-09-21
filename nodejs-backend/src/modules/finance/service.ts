@@ -9,10 +9,12 @@ import {
 } from '../../common/types/domain-event-publisher.js';
 import type { Prisma, PrismaDatabase, PrismaTransaction } from '../../db/prisma.js';
 import type { AuditService } from '../audit/service.js';
+import { DEFAULT_SUMMARY_RANGE_DAYS } from './validation.js';
 import {
   MATCHABLE_ORDER_STATUSES,
   amountsAgree,
-  candidateCreationWindow,
+  candidatePlacementWindow,
+  isReconcilableDirection,
   findMatchCandidates,
   matchOutcomeFor,
   type MatchableOrder,
@@ -76,8 +78,12 @@ interface CandidateOrderRecord {
   readonly currency: string;
   readonly total: DecimalLike;
   readonly contactId: string | null;
-  readonly createdAt: Date;
-  readonly contact: { readonly firstName: string; readonly lastName: string } | null;
+  readonly placedAt: Date | null;
+  readonly contact: {
+    readonly firstName: string;
+    readonly lastName: string;
+    readonly company: string | null;
+  } | null;
 }
 
 /** An order carried through the rule together with the shape the API returns. */
@@ -154,8 +160,8 @@ const transactionSelection = {
   reference: true,
   matchStatus: true,
   matchedOrderId: true,
-  matchedById: true,
   matchedAt: true,
+  matchedById: true,
   version: true,
   createdAt: true,
   updatedAt: true,
@@ -168,35 +174,72 @@ const candidateOrderSelection = {
   currency: true,
   total: true,
   contactId: true,
-  createdAt: true,
-  contact: { select: { firstName: true, lastName: true } },
+  placedAt: true,
+  contact: { select: { firstName: true, lastName: true, company: true } },
 };
 
 /**
- * Prisma renders `Decimal(14, 2)` without trailing zeros, so `1800.00` comes
- * back as `1800`. Every amount is put back into the canonical two-decimal
- * shape on the way out: the wire format is part of the contract, and a client
- * that has to guess the scale is a client that will guess wrong.
+ * Amounts leave as Prisma renders them — shortest exact, so `1800.00` is sent
+ * as `1800` and `12.50` as `12.5`. That is what every other monetary field in
+ * this API already does, and a scale invented for this one module would put
+ * `finance` at odds with `orders` on the same screen.
+ *
+ * Normalisation still happens, but inwards: the rule compares minor units, and
+ * `toMinorUnits` reads either spelling.
  */
-const toStatementDto = ({
-  openingBalance,
-  closingBalance,
-  ...statement
-}: BankStatementRecord): BankStatementDto => ({
-  ...statement,
-  openingBalance: normalizeMoney(openingBalance.toString()),
-  closingBalance: normalizeMoney(closingBalance.toString()),
+/*
+ * Both mappers name every field in order rather than spreading the record and
+ * patching the money on top. Spreading looks tidier and is wrong here: a
+ * patched key moves to the end of the object, so `amount` left in a different
+ * place in the JSON than the sibling backend puts it. Two builds that agree on
+ * every value and disagree on the order of the keys are two builds a
+ * transcript diff reports as different, which is exactly what it is for.
+ */
+const toStatementDto = (statement: BankStatementRecord): BankStatementDto => ({
+  id: statement.id,
+  externalId: statement.externalId,
+  accountLabel: statement.accountLabel,
+  periodStart: statement.periodStart,
+  periodEnd: statement.periodEnd,
+  openingBalance: statement.openingBalance.toString(),
+  closingBalance: statement.closingBalance.toString(),
+  currency: statement.currency,
+  importedAt: statement.importedAt,
+  importedById: statement.importedById,
+  createdAt: statement.createdAt,
+  updatedAt: statement.updatedAt,
 });
 
-const toTransactionDto = ({
-  amount,
-  ...transaction
-}: BankTransactionRecord): BankTransactionDto => ({
-  ...transaction,
-  amount: normalizeMoney(amount.toString()),
+const toTransactionDto = (transaction: BankTransactionRecord): BankTransactionDto => ({
+  id: transaction.id,
+  statementId: transaction.statementId,
+  externalId: transaction.externalId,
+  bookedAt: transaction.bookedAt,
+  amount: transaction.amount.toString(),
+  currency: transaction.currency,
+  direction: transaction.direction,
+  counterpartyName: transaction.counterpartyName,
+  counterpartyAccount: transaction.counterpartyAccount,
+  reference: transaction.reference,
+  matchStatus: transaction.matchStatus,
+  matchedOrderId: transaction.matchedOrderId,
+  matchedAt: transaction.matchedAt,
+  matchedById: transaction.matchedById,
+  version: transaction.version,
+  createdAt: transaction.createdAt,
+  updatedAt: transaction.updatedAt,
 });
 
 const toDate = (value: string): Date => new Date(value);
+
+/**
+ * Upper bound on one reconciliation run. A deployment constant rather than a
+ * client parameter: the work is bounded by what this system can absorb inside
+ * one request, not by what a caller would like.
+ */
+export const RECONCILE_BATCH_SIZE = 200;
+
+const DAY_MS = 86_400_000;
 
 const contactNameOf = (order: CandidateOrderRecord): string | null =>
   order.contact === null ? null : `${order.contact.firstName} ${order.contact.lastName}`;
@@ -206,16 +249,17 @@ const toCandidateOrder = (order: CandidateOrderRecord): CandidateOrder => ({
   orderNumber: order.orderNumber,
   status: order.status,
   total: normalizeMoney(order.total.toString()),
-  createdAt: order.createdAt,
+  placedAt: order.placedAt,
   contactName: contactNameOf(order),
+  contactCompany: order.contact?.company ?? null,
   dto: {
     orderId: order.id,
     orderNumber: order.orderNumber,
     status: order.status,
-    total: normalizeMoney(order.total.toString()),
+    total: order.total.toString(),
     currency: order.currency,
     contactId: order.contactId,
-    createdAt: order.createdAt,
+    placedAt: order.placedAt,
   },
 });
 
@@ -288,23 +332,65 @@ export const createFinanceService = (
     toDto: toTransactionDto,
   });
 
+  /**
+   * Fills in whichever bound the caller left out.
+   *
+   * The newest statement on file, not the clock. A ledger is a record of
+   * periods that happened, and "the summary, please" means the period there
+   * is data for — asked in March or asked two years later. Defaulting to the
+   * last thirty days instead makes the module answer honestly with zeroes and
+   * look broken, which is the worse of the two ways to be right.
+   *
+   * With nothing imported at all there is no period to name, and the window
+   * falls back to the recent past; either way the answer is empty, so the
+   * fallback settles only what the report echoes back.
+   */
+  const resolveSummaryWindow = async (
+    query: FinanceSummaryQuery,
+  ): Promise<{ readonly from: string; readonly to: string }> => {
+    if (query.from !== undefined && query.to !== undefined) {
+      return { from: query.from, to: query.to };
+    }
+
+    const latest = await db.bankStatement.findFirst({
+      orderBy: [{ periodStart: 'desc' }, { id: 'asc' }],
+      select: { periodStart: true, periodEnd: true },
+    });
+
+    const fallbackTo = new Date();
+    // The period is inclusive of its last day; the window is half-open, so the
+    // upper bound is the midnight after it rather than the day itself.
+    const to =
+      query.to ??
+      (latest === null
+        ? fallbackTo.toISOString()
+        : new Date(latest.periodEnd.getTime() + DAY_MS).toISOString());
+    const from =
+      query.from ??
+      (latest === null
+        ? new Date(Date.parse(to) - DEFAULT_SUMMARY_RANGE_DAYS * DAY_MS).toISOString()
+        : latest.periodStart.toISOString());
+
+    return { from, to };
+  };
+
   const loadCandidateOrders = async (
     store: CandidateOrderStore,
     bookedAt: readonly Date[],
   ): Promise<readonly CandidateOrder[]> => {
-    // A candidate must have been created no later than the payment and no
+    // A candidate must have been placed no later than the payment and no
     // earlier than the window before it, so the whole batch needs only the
     // orders inside one bounded span rather than the whole table.
-    const window = candidateCreationWindow(bookedAt);
+    const window = candidatePlacementWindow(bookedAt);
     if (!window) return [];
     const orders = await store.findMany({
       where: {
         deletedAt: null,
         status: { in: [...MATCHABLE_ORDER_STATUSES] },
-        createdAt: { gte: window.from, lte: window.to },
+        placedAt: { gte: window.from, lte: window.to },
       },
       select: candidateOrderSelection,
-      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      orderBy: [{ placedAt: 'asc' }, { id: 'asc' }],
     });
     return orders.map(toCandidateOrder);
   };
@@ -648,11 +734,14 @@ export const createFinanceService = (
 
     async reconcile(access) {
       // Matched transactions are settled and ignored ones were settled by a
-      // person saying "leave this alone"; neither is reconsidered.
+      // person saying "leave this alone"; neither is reconsidered. Outgoing
+      // lines are read in with the rest: they cannot be matched, but they can
+      // be filed, and filing them is what makes IGNORED reachable at all.
       const pending = await db.bankTransaction.findMany({
         where: { matchStatus: { in: ['UNMATCHED', 'SUGGESTED'] } },
         select: transactionSelection,
         orderBy: [{ bookedAt: 'asc' }, { id: 'asc' }],
+        take: RECONCILE_BATCH_SIZE,
       });
       const transactions = pending.map(toTransactionDto);
       const orders = await loadCandidateOrders(
@@ -669,7 +758,9 @@ export const createFinanceService = (
       const matched: string[] = [];
 
       for (const transaction of transactions) {
-        const outcome = matchOutcomeFor(findMatchCandidates(transaction, orders));
+        const outcome = isReconcilableDirection(transaction.direction)
+          ? matchOutcomeFor(findMatchCandidates(transaction, orders))
+          : ({ matchStatus: 'IGNORED', matchedOrderId: null } as const);
         tally[outcome.matchStatus] += 1;
         if (outcome.matchStatus === 'MATCHED' && outcome.matchedOrderId !== null) {
           const applied = await applyAutoMatch(access, transaction, outcome.matchedOrderId);
@@ -705,12 +796,14 @@ export const createFinanceService = (
         matched: tally.MATCHED,
         suggested: tally.SUGGESTED,
         unmatched: tally.UNMATCHED,
+        ignored: tally.IGNORED,
       };
     },
 
     async summary(_access, query) {
+      const window = await resolveSummaryWindow(query);
       const where: Prisma.BankTransactionWhereInput = {
-        bookedAt: { gte: new Date(query.from), lt: new Date(query.to) },
+        bookedAt: { gte: new Date(window.from), lt: new Date(window.to) },
       };
       const [byDirection, byStatus] = await Promise.all([
         db.bankTransaction.groupBy({
@@ -751,7 +844,7 @@ export const createFinanceService = (
         const entry = counted.get(matchStatus);
         const count = entry?.count ?? 0;
         return {
-          matchStatus,
+          status: matchStatus,
           count,
           amount: fromMinorUnits(entry?.amount ?? 0n),
           share: share(count, transactionCount),
@@ -759,15 +852,13 @@ export const createFinanceService = (
       });
 
       return {
-        from: query.from,
-        to: query.to,
-        totals: {
-          transactionCount,
-          inflow: fromMinorUnits(inflow),
-          outflow: fromMinorUnits(outflow),
-          net: fromMinorUnits(inflow - outflow),
-        },
-        byStatus: rows,
+        from: window.from,
+        to: window.to,
+        transactionCount,
+        inflow: fromMinorUnits(inflow),
+        outflow: fromMinorUnits(outflow),
+        net: fromMinorUnits(inflow - outflow),
+        statuses: rows,
       };
     },
   };

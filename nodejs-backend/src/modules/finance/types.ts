@@ -46,8 +46,8 @@ export interface BankTransactionDto {
    * leaving a half-matched row behind.
    */
   readonly matchedOrderId: string | null;
-  readonly matchedById: string | null;
   readonly matchedAt: Date | null;
+  readonly matchedById: string | null;
   readonly version: number;
   readonly createdAt: Date;
   readonly updatedAt: Date;
@@ -65,7 +65,8 @@ export interface MatchCandidateDto {
   readonly total: string;
   readonly currency: string;
   readonly contactId: string | null;
-  readonly createdAt: Date;
+  /** The field the rule compared against, so the reader can check the answer. */
+  readonly placedAt: Date | null;
 }
 
 /**
@@ -94,12 +95,20 @@ export interface StatementImportResult {
   readonly skipped: number;
 }
 
-/** What one reconciliation pass decided about the transactions it examined. */
+/**
+ * What one reconciliation pass decided about the transactions it examined.
+ *
+ * `ignored` counts the outgoing lines. They are examined — that is why
+ * `examined` is the size of the batch and not the size of its incoming half —
+ * and filing them as ignored is the decision, not an omission: rent and
+ * payroll are real movements that no order will ever explain.
+ */
 export interface ReconcileResult {
   readonly examined: number;
   readonly matched: number;
   readonly suggested: number;
   readonly unmatched: number;
+  readonly ignored: number;
 }
 
 export interface MatchTransactionData {
@@ -150,29 +159,39 @@ export interface TransactionListResult {
   readonly total: number;
 }
 
-/** Half-open interval `[from, to)`, both normalised to ISO 8601 UTC strings. */
+/**
+ * Half-open interval `[from, to)`, as the caller asked for it.
+ *
+ * Either bound may be absent, and an absent bound is resolved by the service
+ * from the newest statement on file rather than from the clock. The report
+ * echoes back the window it actually used.
+ */
 export interface FinanceSummaryQuery {
-  readonly from: string;
-  readonly to: string;
+  readonly from?: string | undefined;
+  readonly to?: string | undefined;
 }
 
 export interface FinanceSummaryStatusRow {
-  readonly matchStatus: PaymentMatchStatus;
+  readonly status: PaymentMatchStatus;
   readonly count: number;
   readonly amount: string;
   /** Share of the examined transactions, in `[0, 1]`, rounded to four decimals. */
   readonly share: number;
 }
 
+/**
+ * Flat on purpose. Grouping the three totals under a `totals` object adds a
+ * level that carries no meaning — every field at the top is a fact about the
+ * same window — and the two backends have to agree on the shape, not each
+ * pick the one its author preferred.
+ */
 export interface FinanceSummaryReport {
   readonly from: string;
   readonly to: string;
-  readonly totals: {
-    readonly transactionCount: number;
-    readonly inflow: string;
-    readonly outflow: string;
-    /** Inflow minus outflow; the only value in this module that may be negative. */
-    readonly net: string;
-  };
-  readonly byStatus: readonly FinanceSummaryStatusRow[];
+  readonly transactionCount: number;
+  readonly inflow: string;
+  readonly outflow: string;
+  /** Inflow minus outflow; the only value in this module that may be negative. */
+  readonly net: string;
+  readonly statuses: readonly FinanceSummaryStatusRow[];
 }

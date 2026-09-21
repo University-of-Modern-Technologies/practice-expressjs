@@ -108,30 +108,34 @@ const isoInstant = z
   })
   .transform((value) => new Date(value).toISOString());
 
-interface RangeInput {
-  readonly from?: string | undefined;
-  readonly to?: string | undefined;
-}
-
-// `to` defaults to now and `from` to a fixed window before it, so a caller may
-// send neither, either, or both.
-const applyRangeDefaults = <T extends RangeInput>(value: T): T & { from: string; to: string } => {
-  const to = value.to ?? new Date().toISOString();
-  const from =
-    value.from ?? new Date(Date.parse(to) - DEFAULT_SUMMARY_RANGE_DAYS * DAY_MS).toISOString();
-  return { ...value, from, to };
-};
-
+/**
+ * Both bounds stay optional here, and neither is filled in.
+ *
+ * They used to be defaulted at this point, against the clock: `to` became
+ * "now" and `from` a month before it. That made the answer to a question with
+ * no parameters depend on the day it was asked — a ledger of March, read in
+ * September, reported an empty period for ever. What the window should default
+ * to is a fact about the data, not about the calendar, so the decision moved
+ * to the service, which can see the data.
+ *
+ * The two checks below therefore apply only to a window the caller actually
+ * named. A caller who names nothing is not making a claim to contradict.
+ */
 export const financeSummarySchema = z.object({
   query: z
     .object({ from: isoInstant.optional(), to: isoInstant.optional() })
-    .transform(applyRangeDefaults)
-    .refine((value) => Date.parse(value.from) < Date.parse(value.to), {
-      message: 'from must be earlier than to',
-      path: ['from'],
-    })
     .refine(
-      (value) => Date.parse(value.to) - Date.parse(value.from) <= MAX_SUMMARY_RANGE_DAYS * DAY_MS,
+      (value) =>
+        value.from === undefined ||
+        value.to === undefined ||
+        Date.parse(value.from) < Date.parse(value.to),
+      { message: 'from must be earlier than to', path: ['from'] },
+    )
+    .refine(
+      (value) =>
+        value.from === undefined ||
+        value.to === undefined ||
+        Date.parse(value.to) - Date.parse(value.from) <= MAX_SUMMARY_RANGE_DAYS * DAY_MS,
       {
         message: `The date range must not exceed ${MAX_SUMMARY_RANGE_DAYS} days`,
         path: ['from'],

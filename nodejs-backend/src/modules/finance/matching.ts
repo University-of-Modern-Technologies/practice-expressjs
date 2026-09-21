@@ -19,7 +19,7 @@ export const MATCH_AMOUNT_TOLERANCE = '0.01';
 /** The same tolerance in whole minor units, which is how it is compared. */
 export const MATCH_AMOUNT_TOLERANCE_MINOR_UNITS = toMinorUnits(MATCH_AMOUNT_TOLERANCE);
 
-/** How long after an order was created a payment for it may still arrive. */
+/** How long after an order was placed a payment for it may still arrive. */
 export const MATCH_WINDOW_DAYS = 90;
 
 /** Orders in any other status are not awaiting money and are never candidates. */
@@ -50,9 +50,16 @@ export interface MatchableOrder {
   readonly orderNumber: string;
   readonly status: string;
   readonly total: string;
-  readonly createdAt: Date;
+  /**
+   * When the order was placed — not when its row was written. The two differ
+   * by however long the data has been sitting in the database, and a window
+   * measured from the row's age answers a different question every month.
+   */
+  readonly placedAt: Date | null;
   /** Name of the contact the order belongs to, or null when it has none. */
   readonly contactName: string | null;
+  /** Company the contact belongs to; a payer may use either name. */
+  readonly contactCompany: string | null;
 }
 
 /**
@@ -72,11 +79,24 @@ export const isReconcilableDirection = (direction: TransactionDirection): boolea
 export const referenceMentionsOrder = (reference: string, orderNumber: string): boolean =>
   normalize(reference).includes(normalize(orderNumber));
 
-/** Condition 2, second half: the payer is named like the order's contact. */
+/**
+ * Condition 2, second half: the payer is named like the order's customer.
+ *
+ * A person and their company are two names for the same customer, and money
+ * arrives from an account in either. Comparing only one of them makes the
+ * branch depend on which name the payer's bank happens to print.
+ */
 export const counterpartyMatchesContact = (
   counterpartyName: string,
   contactName: string | null,
-): boolean => contactName !== null && normalize(counterpartyName) === normalize(contactName);
+  contactCompany: string | null = null,
+): boolean => {
+  const payer = normalize(counterpartyName);
+  if (!payer) return false;
+  return [contactName, contactCompany].some(
+    (known) => known !== null && payer === normalize(known),
+  );
+};
 
 /** Condition 3: the amounts agree to within the tolerance, in whole cents. */
 export const amountsAgree = (left: string, right: string): boolean => {
@@ -90,10 +110,11 @@ export const amountsAgree = (left: string, right: string): boolean => {
  * a payment that turns up months later is more likely a different payment than
  * a very late one.
  */
-export const bookedWithinWindow = (bookedAt: Date, orderCreatedAt: Date): boolean => {
+export const bookedWithinWindow = (bookedAt: Date, orderPlacedAt: Date | null): boolean => {
+  if (orderPlacedAt === null) return false;
   const booked = bookedAt.getTime();
-  const created = orderCreatedAt.getTime();
-  return booked >= created && booked <= created + MATCH_WINDOW_DAYS * DAY_MS;
+  const placed = orderPlacedAt.getTime();
+  return booked >= placed && booked <= placed + MATCH_WINDOW_DAYS * DAY_MS;
 };
 
 /** All four conditions, in the order the specification states them. */
@@ -103,9 +124,13 @@ export const isMatchCandidate = (
 ): boolean =>
   isMatchableOrderStatus(order.status) &&
   (referenceMentionsOrder(transaction.reference, order.orderNumber) ||
-    counterpartyMatchesContact(transaction.counterpartyName, order.contactName)) &&
+    counterpartyMatchesContact(
+      transaction.counterpartyName,
+      order.contactName,
+      order.contactCompany,
+    )) &&
   amountsAgree(transaction.amount, order.total) &&
-  bookedWithinWindow(transaction.bookedAt, order.createdAt);
+  bookedWithinWindow(transaction.bookedAt, order.placedAt);
 
 export const findMatchCandidates = <TOrder extends MatchableOrder>(
   transaction: MatchableTransaction,
@@ -141,12 +166,12 @@ export const matchOutcomeFor = (candidates: readonly MatchableOrder[]): MatchOut
 };
 
 /**
- * The widest span of order creation dates that could possibly match any of the
- * given transactions: a candidate must have been created no later than the
+ * The widest span of order placement dates that could possibly match any of
+ * the given transactions: a candidate must have been placed no later than the
  * payment and no more than the window before it. Used to bound the order query
  * instead of reading the whole table.
  */
-export const candidateCreationWindow = (
+export const candidatePlacementWindow = (
   bookedAt: readonly Date[],
 ): { readonly from: Date; readonly to: Date } | null => {
   const times = bookedAt.map((value) => value.getTime());

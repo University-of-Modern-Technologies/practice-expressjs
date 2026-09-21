@@ -119,11 +119,30 @@ describe('matching validation', () => {
 });
 
 describe('summary validation', () => {
-  it('fills in a window when the caller names none', () => {
+  // The window used to be filled in here, from the clock. It is now left
+  // alone, because what it should default to is a fact about the data — the
+  // newest statement on file — and only the service can see that.
+  it('accepts a request that names no window, and invents none', () => {
     const parsed = financeSummarySchema.safeParse({ query: {} });
     expect(parsed.success).toBe(true);
     if (!parsed.success) return;
-    expect(Date.parse(parsed.data.query.from)).toBeLessThan(Date.parse(parsed.data.query.to));
+    expect(parsed.data.query.from).toBeUndefined();
+    expect(parsed.data.query.to).toBeUndefined();
+  });
+
+  it('still checks a window the caller did name', () => {
+    expect(
+      financeSummarySchema.safeParse({
+        query: { from: '2026-03-01T00:00:00Z', to: '2026-04-01T00:00:00Z' },
+      }).success,
+    ).toBe(true);
+  });
+
+  // One bound alone cannot be wrong: the other is not a claim the caller made.
+  it('takes a single bound without complaint', () => {
+    expect(
+      financeSummarySchema.safeParse({ query: { from: '2026-03-01T00:00:00Z' } }).success,
+    ).toBe(true);
   });
 
   it('refuses a window that runs backwards or scans years', () => {
