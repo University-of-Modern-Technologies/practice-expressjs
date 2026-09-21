@@ -40,7 +40,7 @@ const base: BankTransactionDetail = {
   direction: 'CREDIT',
   counterpartyName: 'Acme LLC',
   counterpartyAccount: null,
-  reference: 'Оплата за послуги, січень',
+  reference: 'Оплата за послуги, січень, SO-1001',
   matchStatus: 'SUGGESTED',
   matchedOrderId: null,
   matchedAt: null,
@@ -60,8 +60,8 @@ const twoCandidates: BankTransactionDetail = {
       total: '1250.00',
       currency: 'USD',
       status: 'CONFIRMED',
-      contactName: 'Acme LLC',
-      createdAt: '2026-01-10T09:00:00.000Z',
+      contactId: 'contact-1',
+      placedAt: '2026-01-10T09:00:00.000Z',
     },
     {
       orderId: 'ord-2',
@@ -69,8 +69,8 @@ const twoCandidates: BankTransactionDetail = {
       total: '1250.00',
       currency: 'USD',
       status: 'PAID',
-      contactName: 'Globex Inc',
-      createdAt: '2026-01-02T09:00:00.000Z',
+      contactId: 'contact-2',
+      placedAt: '2026-01-02T09:00:00.000Z',
     },
   ],
 };
@@ -105,7 +105,7 @@ describe('Платіж — стан «потрібен вибір»', () => {
     showCard(twoCandidates, ['finance:read', 'finance:write', 'orders:read']);
 
     await screen.findByText('SO-1001');
-    expect(screen.getByText('Платник збігається з контактом: Acme LLC')).toBeInTheDocument();
+    expect(screen.getByText('У призначенні платежу є номер SO-1001')).toBeInTheDocument();
     expect(screen.getAllByText('Сума збігається точно')).toHaveLength(2);
   });
 
@@ -140,7 +140,7 @@ describe('Платіж — стан «потрібен вибір»', () => {
     showCard(twoCandidates, ['finance:read', 'orders:read']);
 
     await screen.findByText('SO-1001');
-    expect(screen.getByText('Платник збігається з контактом: Acme LLC')).toBeInTheDocument();
+    expect(screen.getByText('У призначенні платежу є номер SO-1001')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Звести з цим/ })).not.toBeInTheDocument();
   });
 

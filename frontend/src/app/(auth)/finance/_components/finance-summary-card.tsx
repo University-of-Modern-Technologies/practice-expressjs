@@ -3,7 +3,11 @@
 import { Alert, Card, Col, Row, Skeleton, Statistic } from 'antd';
 import { Bar, BarChart, CartesianGrid, Cell, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { EmptyState, MoneyValue } from '@/components';
-import { Money } from '@/lib/money';
+// The build reports the window's totals without naming a currency: every
+// statement it knows is in one, and a figure that summed several would be
+// wrong whatever label it carried. The default is what the rest of the client
+// formats an unlabelled amount with.
+import { DEFAULT_CURRENCY, Money } from '@/lib/money';
 import { formatCount } from '@/lib/number';
 import { PALETTE, statusMeta, type StatusColor } from '@/shared/constants';
 import { PAYMENT_MATCH_STATUS, type FinanceSummary } from '../finance.types';
@@ -58,10 +62,10 @@ export function FinanceSummaryCard({
   isError,
   extra,
 }: FinanceSummaryCardProps) {
-  const shares = summary?.matchStatuses ?? [];
+  const shares = summary?.statuses ?? [];
 
   const data = shares.map((share) => {
-    const meta = statusMeta(PAYMENT_MATCH_STATUS, share.matchStatus);
+    const meta = statusMeta(PAYMENT_MATCH_STATUS, share.status);
     return {
       label: meta.label,
       count: share.count,
@@ -82,7 +86,7 @@ export function FinanceSummaryCard({
             <Statistic
               title="Надходження"
               valueRender={() => (
-                <MoneyValue value={summary.totals.credit} currency={summary.currency} showCurrency />
+                <MoneyValue value={summary.inflow} currency={DEFAULT_CURRENCY} showCurrency />
               )}
             />
           </Col>
@@ -90,7 +94,7 @@ export function FinanceSummaryCard({
             <Statistic
               title="Списання"
               valueRender={() => (
-                <MoneyValue value={summary.totals.debit} currency={summary.currency} showCurrency />
+                <MoneyValue value={summary.outflow} currency={DEFAULT_CURRENCY} showCurrency />
               )}
             />
           </Col>
@@ -98,12 +102,12 @@ export function FinanceSummaryCard({
             <Statistic
               title="Різниця"
               valueRender={() => (
-                <MoneyValue value={summary.totals.net} currency={summary.currency} showCurrency />
+                <MoneyValue value={summary.net} currency={DEFAULT_CURRENCY} showCurrency />
               )}
             />
           </Col>
           <Col xs={24} sm={6}>
-            <Statistic title="Транзакцій" value={summary.totals.transactionCount} />
+            <Statistic title="Транзакцій" value={summary.transactionCount} />
           </Col>
         </Row>
 
@@ -124,7 +128,7 @@ export function FinanceSummaryCard({
                   const money =
                     amount === undefined
                       ? ''
-                      : ` · ${Money.parseOrZero(amount, summary.currency).format()}`;
+                      : ` · ${Money.parseOrZero(amount, DEFAULT_CURRENCY).format()}`;
                   return `${formatCount(Number(value))}${money}`;
                 }}
               />

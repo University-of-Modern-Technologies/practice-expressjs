@@ -108,9 +108,14 @@ export interface MatchCandidate {
   readonly total: MoneyWire;
   readonly currency: CurrencyCode;
   readonly status: OrderStatus;
-  /** Name of the contact the order is for — the second of the two match routes. */
-  readonly contactName: string | null;
-  readonly createdAt: IsoDateTime;
+  /** Contact the order belongs to, as an identifier; the build sends no name. */
+  readonly contactId: Id | null;
+  /**
+   * When the order was placed — the field the server's window was measured
+   * from, so the distance shown beside a candidate is the distance that
+   * actually decided anything. Empty when the order was never placed.
+   */
+  readonly placedAt: IsoDateTime;
 }
 
 /**
@@ -148,8 +153,8 @@ export const readCandidates = (value: unknown): readonly MatchCandidate[] => {
         total: row.total,
         currency: typeof row.currency === 'string' ? row.currency : 'USD',
         status: (typeof row.status === 'string' ? row.status : 'CONFIRMED') as OrderStatus,
-        contactName: typeof row.contactName === 'string' ? row.contactName : null,
-        createdAt: typeof row.createdAt === 'string' ? row.createdAt : '',
+        contactId: typeof row.contactId === 'string' ? row.contactId : null,
+        placedAt: typeof row.placedAt === 'string' ? row.placedAt : '',
       },
     ];
   });
@@ -157,22 +162,26 @@ export const readCandidates = (value: unknown): readonly MatchCandidate[] => {
 
 /** Period summary: inflow, outflow, and the shares each match state holds. */
 export interface FinanceMatchShare {
-  readonly matchStatus: PaymentMatchStatus;
+  readonly status: PaymentMatchStatus;
   readonly count: number;
   readonly amount: MoneyWire;
+  /** Share of the window's transactions, in `[0, 1]`, to four decimals. */
+  readonly share: number;
 }
 
+/**
+ * Flat, the way the build sends it. All four states are always present, so a
+ * card comparing two periods has rows that line up rather than rows that
+ * appear and disappear with the data.
+ */
 export interface FinanceSummary {
   readonly from: IsoDateTime;
   readonly to: IsoDateTime;
-  readonly currency: CurrencyCode;
-  readonly totals: {
-    readonly credit: MoneyWire;
-    readonly debit: MoneyWire;
-    readonly net: MoneyWire;
-    readonly transactionCount: number;
-  };
-  readonly matchStatuses: readonly FinanceMatchShare[];
+  readonly transactionCount: number;
+  readonly inflow: MoneyWire;
+  readonly outflow: MoneyWire;
+  readonly net: MoneyWire;
+  readonly statuses: readonly FinanceMatchShare[];
 }
 
 export interface FinanceSummaryQuery {
@@ -198,6 +207,8 @@ export interface ReconcileResult {
   readonly matched: number;
   readonly suggested: number;
   readonly unmatched: number;
+  /** Outgoing money: examined, then filed, because no order will explain it. */
+  readonly ignored: number;
 }
 
 /** The only columns the API agrees to order by; anything else answers 400. */

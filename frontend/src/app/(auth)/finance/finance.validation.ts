@@ -136,17 +136,11 @@ export const describeMatch = (
     });
   }
 
-  if (
-    candidate.contactName !== null &&
-    candidate.contactName !== '' &&
-    flatten(candidate.contactName) === flatten(transaction.counterpartyName)
-  ) {
-    grounds.push({
-      key: 'counterparty',
-      kind: 'evidence',
-      text: `Платник збігається з контактом: ${candidate.contactName}`,
-    });
-  }
+  // The second route into the rule — the payer being named like the customer —
+  // is deliberately not reconstructed here. The build sends the candidate's
+  // contact as an identifier and no name, and a hint invented from a name this
+  // page happens to have cached would be evidence about a different comparison
+  // than the one the server made.
 
   if (candidate.currency !== transaction.currency) {
     // Nothing in the rule compares currencies, so a same-number order in
@@ -174,22 +168,23 @@ export const describeMatch = (
     });
   }
 
-  const distance = candidate.createdAt === '' ? null : daysBetween(transaction.bookedAt, candidate.createdAt);
+  const distance =
+    candidate.placedAt === '' ? null : daysBetween(transaction.bookedAt, candidate.placedAt);
   if (distance !== null) {
     grounds.push(
       distance < 0
         ? {
             key: 'timing',
             kind: 'caution',
-            text: `Платіж на ${Math.abs(distance)} дн. раніший за замовлення`,
+            text: `Платіж на ${Math.abs(distance)} дн. раніший за розміщення замовлення`,
           }
         : {
             key: 'timing',
             kind: 'neutral',
             text:
               distance === 0
-                ? 'Платіж того самого дня, що й замовлення'
-                : `Платіж через ${distance} дн. після замовлення`,
+                ? 'Платіж того самого дня, що й розміщення замовлення'
+                : `Платіж через ${distance} дн. після розміщення замовлення`,
           },
     );
   }

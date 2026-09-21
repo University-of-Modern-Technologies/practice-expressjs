@@ -39,17 +39,15 @@ const statement: BankStatement = {
 const summary: FinanceSummary = {
   from: '2026-01-01T00:00:00.000Z',
   to: '2026-02-01T00:00:00.000Z',
-  currency: 'USD',
-  totals: {
-    credit: '9000.00',
-    debit: '6250.00',
-    net: '2750.00',
-    transactionCount: 12,
-  },
-  matchStatuses: [
-    { matchStatus: 'MATCHED', count: 4, amount: '5000.00' },
-    { matchStatus: 'SUGGESTED', count: 2, amount: '2500.00' },
-    { matchStatus: 'UNMATCHED', count: 6, amount: '6750.00' },
+  transactionCount: 12,
+  inflow: '9000.00',
+  outflow: '6250.00',
+  net: '2750.00',
+  statuses: [
+    { status: 'MATCHED', count: 4, amount: '5000.00', share: 0.3333 },
+    { status: 'SUGGESTED', count: 2, amount: '2500.00', share: 0.1667 },
+    { status: 'UNMATCHED', count: 6, amount: '6750.00', share: 0.5 },
+    { status: 'IGNORED', count: 0, amount: '0.00', share: 0 },
   ],
 };
 

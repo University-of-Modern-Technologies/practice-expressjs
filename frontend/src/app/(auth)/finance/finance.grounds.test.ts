@@ -29,8 +29,8 @@ const candidate = (overrides: Partial<MatchCandidate> = {}): MatchCandidate => (
   total: '1250.00',
   currency: 'USD',
   status: 'CONFIRMED',
-  contactName: 'Acme LLC',
-  createdAt: '2026-01-01T09:00:00.000Z',
+  contactId: 'contact-1',
+  placedAt: '2026-01-01T09:00:00.000Z',
   ...overrides,
 });
 
@@ -57,13 +57,16 @@ describe('describeMatch — чому цей кандидат тут', () => {
     expect(texts(grounds)).toContain('У призначенні платежу є номер SO-1001');
   });
 
-  it('називає збіг за назвою платника, коли номера немає', () => {
+  // The second route into the rule — the payer named like the customer — is
+  // not reconstructed here: the build sends the candidate's contact as an
+  // identifier and no name, so there is nothing to compare the payer with.
+  it('мовчить про платника, бо збіг за іменем перевіряє сервер, а не клієнт', () => {
     const grounds = describeMatch(
       transaction({ reference: 'Оплата за договором' }),
-      candidate({ contactName: 'Acme LLC' }),
+      candidate(),
     );
 
-    expect(texts(grounds)).toContain('Платник збігається з контактом: Acme LLC');
+    expect(texts(grounds)).not.toContain('Платник');
     expect(texts(grounds)).not.toContain('У призначенні платежу');
   });
 
@@ -101,10 +104,10 @@ describe('describeMatch — чому цей кандидат тут', () => {
   it('називає платіж, що стався раніше за замовлення, як відстань у днях', () => {
     const grounds = describeMatch(
       transaction({ bookedAt: '2025-09-03T10:00:00.000Z' }),
-      candidate({ createdAt: '2026-01-01T09:00:00.000Z' }),
+      candidate({ placedAt: '2026-01-01T09:00:00.000Z' }),
     );
 
-    expect(texts(grounds)).toContain('раніший за замовлення');
+    expect(texts(grounds)).toContain('раніший за розміщення замовлення');
   });
 
   it('позначає попередження як попередження, а докази як докази', () => {

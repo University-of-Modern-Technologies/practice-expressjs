@@ -112,8 +112,10 @@ export function MatchCandidates({
               </Link>
               <StatusTag dictionary={ORDER_STATUS} value={candidate.status} />
               <MoneyValue value={candidate.total} currency={candidate.currency} showCurrency />
-              {candidate.contactName === null ? null : (
-                <Typography.Text type="secondary">{candidate.contactName}</Typography.Text>
+              {candidate.contactId === null ? null : (
+                <Link href={`/contacts/${candidate.contactId}`}>
+                  <Typography.Text type="secondary">Клієнт</Typography.Text>
+                </Link>
               )}
             </Space>
 
