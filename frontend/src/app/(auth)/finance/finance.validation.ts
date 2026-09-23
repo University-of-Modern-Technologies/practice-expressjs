@@ -1,5 +1,5 @@
-import { DateTime } from '@/lib/date-time';
 import { Money } from '@/lib/money';
+import { DEFAULT_REPORT_RANGE } from '@/shared/constants';
 import type { MoneyWire } from '@/types/domain';
 import type { BankTransaction, MatchCandidate } from './finance.types';
 
@@ -7,8 +7,15 @@ const DAY_MS = 86_400_000;
 
 /** Widest window the summary scans in one request; anything larger answers 400. */
 export const MAX_SUMMARY_DAYS = 366;
-/** Window applied when the query string names none. */
-export const DEFAULT_SUMMARY_DAYS = 30;
+/**
+ * Window applied when the query string names none. A fixed month rather than a
+ * stretch measured backwards from the clock; see `shared/constants/reporting`.
+ *
+ * The summary always opens on this reporting window, independently of the
+ * statement list. That makes its request deterministic and lets the card load
+ * while the list is still pending.
+ */
+export const DEFAULT_SUMMARY_RANGE = DEFAULT_REPORT_RANGE;
 
 /** A calendar day as the picker writes it into the query string. */
 const CALENDAR_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
@@ -32,8 +39,8 @@ export const resolveSummaryRange = (
   from: string | undefined,
   to: string | undefined,
 ): CalendarRange => ({
-  from: readDate(from) ?? DateTime.daysAgo(DEFAULT_SUMMARY_DAYS),
-  to: readDate(to) ?? DateTime.today(),
+  from: readDate(from) ?? DEFAULT_SUMMARY_RANGE.from,
+  to: readDate(to) ?? DEFAULT_SUMMARY_RANGE.to,
 });
 
 /**

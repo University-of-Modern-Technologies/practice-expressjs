@@ -29,6 +29,9 @@ export interface SummaryRangeState {
 /**
  * The period the summary is read for. A window the API would reject is never
  * sent: the reason is shown under the picker instead of arriving as a 400.
+ *
+ * An untouched picker always opens on the shared reporting month. It does not
+ * depend on statement-list data, so the summary can load independently.
  */
 export const useSummaryRange = (): SummaryRangeState => {
   const { params, setParams, resetParams } = useListParams<SummaryFilter>({

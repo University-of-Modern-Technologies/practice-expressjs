@@ -82,7 +82,6 @@ function ReconcileSummaryNotice({
 
 function FinanceOverview() {
   const reportError = useReportError();
-  const range = useSummaryRange();
 
   const [isBankDown, setIsBankDown] = useState(false);
   const [lastRun, setLastRun] = useState<{
@@ -94,6 +93,11 @@ function FinanceOverview() {
   const { params, setParams } = useListParams<StatementFilter>({ filters: STATEMENT_FILTERS });
 
   const statements = useStatements(toStatementListQuery(params));
+
+  // The shared reporting month is independent of imported statements, so the
+  // summary request starts with the list instead of waiting for it.
+  const range = useSummaryRange();
+
   // A window the API would reject is never sent: the reason is read under the
   // picker instead of arriving as a 400.
   const summary = useFinanceSummary(range.wire, { enabled: range.issue === null });
