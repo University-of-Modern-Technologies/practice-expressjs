@@ -1,7 +1,10 @@
 FROM node:22-alpine AS dependencies
 WORKDIR /app
 COPY package.json package-lock.json ./
-RUN npm ci
+# Neither the schema nor the Prisma runner is in this layer, so the postinstall
+# hook would have nothing to generate from. The build stage runs the generation
+# itself, once both are copied.
+RUN npm ci --ignore-scripts
 
 FROM dependencies AS build
 COPY tsconfig.json tsconfig.build.json ./

@@ -51,6 +51,12 @@ import {
   type AuthConfig,
 } from './modules/auth/index.js';
 import {
+  createCallProvider,
+  createCallsController,
+  createCallsRouter,
+  createCallsService,
+} from './modules/calls/index.js';
+import {
   createContactsController,
   createContactsRouter,
   createContactsService,
@@ -60,6 +66,17 @@ import {
   createDealsRouter,
   createDealsService,
 } from './modules/deals/index.js';
+import {
+  createFinanceController,
+  createFinanceRouter,
+  createFinanceService,
+  createStubBankProvider,
+} from './modules/finance/index.js';
+import {
+  createHelpdeskController,
+  createHelpdeskRouter,
+  createHelpdeskService,
+} from './modules/helpdesk/index.js';
 import {
   createIntegrationsController,
   createIntegrationsRouter,
@@ -263,6 +280,33 @@ const createModules = ({
     createDealsService(prisma, auditService, publisher),
     rbacService,
   );
+  const callsController = createCallsController(
+    createCallsService(
+      prisma,
+      auditService,
+      createCallProvider({
+        config: {
+          baseUrl: config.callProviderBaseUrl,
+          apiKey: config.callProviderApiKey,
+          timeoutMs: config.callProviderTimeoutMs,
+          maxAttempts: config.callProviderMaxAttempts,
+          backoffMs: config.callProviderBackoffMs,
+        },
+        logger,
+      }),
+      publisher,
+      { syncBatchSize: config.callSyncBatchSize },
+    ),
+    rbacService,
+  );
+  const financeController = createFinanceController(
+    createFinanceService(prisma, auditService, createStubBankProvider(), publisher),
+    rbacService,
+  );
+  const helpdeskController = createHelpdeskController(
+    createHelpdeskService(prisma, auditService, publisher),
+    rbacService,
+  );
   const auditController = createAuditController(auditService, rbacService);
   const productsController = createProductsController(
     createProductsService(prisma, auditService, publisher),
@@ -328,6 +372,9 @@ const createModules = ({
       { path: '/api/v1/contacts', router: createContactsRouter(contactsController, authenticate) },
       { path: '/api/v1/deals', router: createDealsRouter(dealsController, authenticate) },
       { path: '/api/v1/audit', router: createAuditRouter(auditController, authenticate) },
+      { path: '/api/v1/helpdesk', router: createHelpdeskRouter(helpdeskController, authenticate) },
+      { path: '/api/v1/calls', router: createCallsRouter(callsController, authenticate) },
+      { path: '/api/v1/finance', router: createFinanceRouter(financeController, authenticate) },
       { path: '/api/v1/products', router: createProductsRouter(productsController, authenticate) },
       { path: '/api/v1/orders', router: createOrdersRouter(ordersController, authenticate) },
       {

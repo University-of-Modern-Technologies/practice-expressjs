@@ -55,6 +55,15 @@ const envSchema = z.object({
   AI_MAX_INPUT_CHARS: z.coerce.number().int().min(100).max(1_000_000).default(4_000),
   AI_CACHE_TTL_SECONDS: z.coerce.number().int().min(1).max(86_400).default(300),
 
+  // Telephony. Absent base URL means the built-in offline stub, so a fresh
+  // checkout imports a journal without a carrier account.
+  CALL_PROVIDER_BASE_URL: z.url().optional(),
+  CALL_PROVIDER_API_KEY: z.string().min(1).optional(),
+  CALL_PROVIDER_TIMEOUT_MS: z.coerce.number().int().min(100).max(120_000).default(5_000),
+  CALL_PROVIDER_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(10).default(3),
+  CALL_PROVIDER_BACKOFF_MS: z.coerce.number().int().min(0).max(60_000).default(200),
+  CALL_SYNC_BATCH_SIZE: z.coerce.number().int().min(1).max(1_000).default(100),
+
   // Absent means each dependency picks its own stand-in exactly as it always
   // has (a mock AI provider, a stub delivery transport, a real cache backed by
   // Redis). `offline` forces every stand-in at once, ignoring the settings
@@ -102,6 +111,12 @@ export type AppConfig = Readonly<{
   aiMaxTokens: number;
   aiMaxInputChars: number;
   aiCacheTtlSeconds: number;
+  callProviderBaseUrl?: string | undefined;
+  callProviderApiKey?: string | undefined;
+  callProviderTimeoutMs: number;
+  callProviderMaxAttempts: number;
+  callProviderBackoffMs: number;
+  callSyncBatchSize: number;
   infraProfile?: z.infer<typeof envSchema>['INFRA_PROFILE'];
 }>;
 
@@ -155,6 +170,12 @@ export const loadConfig = (source: NodeJS.ProcessEnv = process.env): AppConfig =
     aiMaxTokens: parsed.data.AI_MAX_TOKENS,
     aiMaxInputChars: parsed.data.AI_MAX_INPUT_CHARS,
     aiCacheTtlSeconds: parsed.data.AI_CACHE_TTL_SECONDS,
+    callProviderBaseUrl: parsed.data.CALL_PROVIDER_BASE_URL,
+    callProviderApiKey: parsed.data.CALL_PROVIDER_API_KEY,
+    callProviderTimeoutMs: parsed.data.CALL_PROVIDER_TIMEOUT_MS,
+    callProviderMaxAttempts: parsed.data.CALL_PROVIDER_MAX_ATTEMPTS,
+    callProviderBackoffMs: parsed.data.CALL_PROVIDER_BACKOFF_MS,
+    callSyncBatchSize: parsed.data.CALL_SYNC_BATCH_SIZE,
     infraProfile: parsed.data.INFRA_PROFILE,
   };
 };

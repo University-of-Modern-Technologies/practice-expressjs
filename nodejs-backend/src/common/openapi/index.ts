@@ -2,9 +2,12 @@ import { aiPaths } from './ai.paths.js';
 import { analyticsPaths } from './analytics.paths.js';
 import { auditPaths } from './audit.paths.js';
 import { authPaths } from './auth.paths.js';
+import { callsPaths } from './calls.paths.js';
 import { openApiComponents } from './components.js';
 import { contactsPaths } from './contacts.paths.js';
 import { dealsPaths } from './deals.paths.js';
+import { financePaths } from './finance.paths.js';
+import { helpdeskPaths } from './helpdesk.paths.js';
 import { integrationsPaths } from './integrations.paths.js';
 import { ordersPaths } from './orders.paths.js';
 import { productsPaths } from './products.paths.js';
@@ -62,7 +65,11 @@ export const openApiDefinition = {
     { name: 'Roles', description: 'Ролі та їхні дозволи' },
     { name: 'Contacts', description: 'Контакти CRM' },
     { name: 'Deals', description: 'Угоди CRM' },
+    { name: 'Helpdesk', description: 'Звернення клієнтів' },
     { name: 'Deal transitions', description: 'Переходи угод між stage' },
+    { name: 'Helpdesk transitions', description: 'Переходи звернень між станами' },
+    { name: 'Calls', description: 'Журнал дзвінків' },
+    { name: 'Finance', description: 'Виписки та зведення платежів' },
     { name: 'Audit', description: 'Журнал аудиту' },
     { name: 'Resource history', description: 'Історія змін ресурсу' },
     { name: 'Products', description: 'Каталог товарів' },
@@ -86,6 +93,9 @@ export const openApiDefinition = {
     ...rbacPaths,
     ...contactsPaths,
     ...dealsPaths,
+    ...helpdeskPaths,
+    ...callsPaths,
+    ...financePaths,
     ...auditPaths,
     ...productsPaths,
     ...ordersPaths,

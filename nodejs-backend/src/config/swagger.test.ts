@@ -119,8 +119,8 @@ describe('openApiDocument', () => {
   });
 
   it('documents the expected number of paths and operations', () => {
-    expect(Object.keys(paths)).toHaveLength(54);
-    expect(operations()).toHaveLength(74);
+    expect(Object.keys(paths)).toHaveLength(69);
+    expect(operations()).toHaveLength(95);
   });
 
   it('documents both verbs mounted on a single warehouse', () => {

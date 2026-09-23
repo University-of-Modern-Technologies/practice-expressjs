@@ -36,22 +36,75 @@ enum StockMovementType {
   ADJUSTMENT
 }
 
+enum TicketChannel {
+  EMAIL
+  PHONE
+  CHAT
+  WEB
+}
+
+enum TicketStatus {
+  NEW
+  OPEN
+  PENDING
+  RESOLVED
+  CLOSED
+}
+
+enum TicketPriority {
+  LOW
+  NORMAL
+  HIGH
+  URGENT
+}
+
+enum CallDirection {
+  INBOUND
+  OUTBOUND
+}
+
+enum CallDisposition {
+  ANSWERED
+  NO_ANSWER
+  BUSY
+  FAILED
+  VOICEMAIL
+}
+
+enum TransactionDirection {
+  CREDIT
+  DEBIT
+}
+
+enum PaymentMatchStatus {
+  UNMATCHED
+  SUGGESTED
+  MATCHED
+  IGNORED
+}
+
 model User {
-  id             String                @id @default(uuid()) @db.Uuid
-  email          String                @unique @db.VarChar(320)
-  passwordHash   String                @map("password_hash") @db.VarChar(255)
-  name           String                @db.VarChar(120)
-  isActive       Boolean               @default(true) @map("is_active")
-  createdAt      DateTime              @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt      DateTime              @updatedAt @map("updated_at") @db.Timestamptz(3)
-  sessions       Session[]
-  userRoles      UserRole[]
-  contacts       Contact[]             @relation("ContactOwner")
-  deals          Deal[]                @relation("DealOwner")
-  auditLogs      AuditLog[]            @relation("AuditActor")
-  orders         Order[]               @relation("OrderOwner")
-  stockMovements StockMovement[]       @relation("StockActor")
-  settingEdits   OrganizationSetting[] @relation("SettingEditor")
+  id                  String                @id @default(uuid()) @db.Uuid
+  email               String                @unique @db.VarChar(320)
+  passwordHash        String                @map("password_hash") @db.VarChar(255)
+  name                String                @db.VarChar(120)
+  isActive            Boolean               @default(true) @map("is_active")
+  createdAt           DateTime              @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt           DateTime              @updatedAt @map("updated_at") @db.Timestamptz(3)
+  sessions            Session[]
+  userRoles           UserRole[]
+  contacts            Contact[]             @relation("ContactOwner")
+  deals               Deal[]                @relation("DealOwner")
+  auditLogs           AuditLog[]            @relation("AuditActor")
+  orders              Order[]               @relation("OrderOwner")
+  stockMovements      StockMovement[]       @relation("StockActor")
+  settingEdits        OrganizationSetting[] @relation("SettingEditor")
+  tickets             Ticket[]              @relation("TicketOwner")
+  ticketsAssigned     Ticket[]              @relation("TicketAssignee")
+  ticketStatusChanges TicketStatusLog[]     @relation("TicketStatusActor")
+  calls               Call[]                @relation("CallOwner")
+  statementImports    BankStatement[]       @relation("StatementImporter")
+  transactionMatches  BankTransaction[]     @relation("TransactionMatcher")
 
   @@index([isActive])
   @@map("users")
@@ -138,6 +191,8 @@ model Contact {
   owner     User      @relation("ContactOwner", fields: [ownerId], references: [id], onDelete: Restrict)
   deals     Deal[]
   orders    Order[]
+  tickets   Ticket[]
+  calls     Call[]
 
   @@index([ownerId, deletedAt])
   @@index([lastName, firstName])
@@ -164,6 +219,7 @@ model Deal {
   owner             User      @relation("DealOwner", fields: [ownerId], references: [id], onDelete: Restrict)
   contact           Contact?  @relation(fields: [contactId], references: [id], onDelete: SetNull)
   orders            Order[]
+  calls             Call[]
 
   @@index([ownerId, stage, deletedAt])
   @@index([contactId])
@@ -196,27 +252,28 @@ model Product {
 }
 
 model Order {
-  id            String      @id @default(uuid()) @db.Uuid
-  orderNumber   String      @unique @map("order_number") @db.VarChar(32)
-  ownerId       String      @map("owner_id") @db.Uuid
-  contactId     String?     @map("contact_id") @db.Uuid
-  dealId        String?     @map("deal_id") @db.Uuid
-  status        OrderStatus @default(DRAFT)
-  currency      String      @default("USD") @db.Char(3)
-  subtotal      Decimal     @default(0) @db.Decimal(14, 2)
-  discountTotal Decimal     @default(0) @map("discount_total") @db.Decimal(14, 2)
-  taxTotal      Decimal     @default(0) @map("tax_total") @db.Decimal(14, 2)
-  total         Decimal     @default(0) @db.Decimal(14, 2)
-  notes         String?     @db.Text
-  version       Int         @default(1)
-  placedAt      DateTime?   @map("placed_at") @db.Timestamptz(3)
-  createdAt     DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt     DateTime    @updatedAt @map("updated_at") @db.Timestamptz(3)
-  deletedAt     DateTime?   @map("deleted_at") @db.Timestamptz(3)
-  owner         User        @relation("OrderOwner", fields: [ownerId], references: [id], onDelete: Restrict)
-  contact       Contact?    @relation(fields: [contactId], references: [id], onDelete: SetNull)
-  deal          Deal?       @relation(fields: [dealId], references: [id], onDelete: SetNull)
-  items         OrderItem[]
+  id               String            @id @default(uuid()) @db.Uuid
+  orderNumber      String            @unique @map("order_number") @db.VarChar(32)
+  ownerId          String            @map("owner_id") @db.Uuid
+  contactId        String?           @map("contact_id") @db.Uuid
+  dealId           String?           @map("deal_id") @db.Uuid
+  status           OrderStatus       @default(DRAFT)
+  currency         String            @default("USD") @db.Char(3)
+  subtotal         Decimal           @default(0) @db.Decimal(14, 2)
+  discountTotal    Decimal           @default(0) @map("discount_total") @db.Decimal(14, 2)
+  taxTotal         Decimal           @default(0) @map("tax_total") @db.Decimal(14, 2)
+  total            Decimal           @default(0) @db.Decimal(14, 2)
+  notes            String?           @db.Text
+  version          Int               @default(1)
+  placedAt         DateTime?         @map("placed_at") @db.Timestamptz(3)
+  createdAt        DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime          @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt        DateTime?         @map("deleted_at") @db.Timestamptz(3)
+  owner            User              @relation("OrderOwner", fields: [ownerId], references: [id], onDelete: Restrict)
+  contact          Contact?          @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  deal             Deal?             @relation(fields: [dealId], references: [id], onDelete: SetNull)
+  items            OrderItem[]
+  bankTransactions BankTransaction[]
 
   @@index([ownerId, status, deletedAt])
   @@index([contactId])
@@ -326,4 +383,129 @@ model AuditLog {
   @@index([entityType, entityId, createdAt])
   @@index([action, createdAt])
   @@map("audit_logs")
+}
+
+model Ticket {
+  id         String            @id @default(uuid()) @db.Uuid
+  number     String            @unique @db.VarChar(16)
+  subject    String            @db.VarChar(200)
+  body       String            @db.Text
+  channel    TicketChannel
+  status     TicketStatus      @default(NEW)
+  priority   TicketPriority    @default(NORMAL)
+  ownerId    String            @map("owner_id") @db.Uuid
+  contactId  String?           @map("contact_id") @db.Uuid
+  assigneeId String?           @map("assignee_id") @db.Uuid
+  version    Int               @default(1)
+  openedAt   DateTime          @default(now()) @map("opened_at") @db.Timestamptz(3)
+  resolvedAt DateTime?         @map("resolved_at") @db.Timestamptz(3)
+  createdAt  DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt  DateTime          @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt  DateTime?         @map("deleted_at") @db.Timestamptz(3)
+  owner      User              @relation("TicketOwner", fields: [ownerId], references: [id], onDelete: Restrict)
+  contact    Contact?          @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  assignee   User?             @relation("TicketAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
+  statusLogs TicketStatusLog[]
+
+  @@index([ownerId, status, deletedAt])
+  @@index([status, priority])
+  @@index([contactId])
+  @@index([assigneeId])
+  @@index([deletedAt])
+  @@map("tickets")
+}
+
+model TicketStatusLog {
+  id          String        @id @default(uuid()) @db.Uuid
+  ticketId    String        @map("ticket_id") @db.Uuid
+  fromStatus  TicketStatus? @map("from_status")
+  toStatus    TicketStatus  @map("to_status")
+  changedById String?       @map("changed_by_id") @db.Uuid
+  note        String?       @db.VarChar(500)
+  changedAt   DateTime      @default(now()) @map("changed_at") @db.Timestamptz(3)
+  ticket      Ticket        @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  changedBy   User?         @relation("TicketStatusActor", fields: [changedById], references: [id], onDelete: SetNull)
+
+  @@index([ticketId, changedAt])
+  @@map("ticket_status_logs")
+}
+
+model Call {
+  id              String          @id @default(uuid()) @db.Uuid
+  externalId      String          @unique @map("external_id") @db.VarChar(64)
+  direction       CallDirection
+  disposition     CallDisposition
+  fromNumber      String          @map("from_number") @db.VarChar(32)
+  toNumber        String          @map("to_number") @db.VarChar(32)
+  startedAt       DateTime        @map("started_at") @db.Timestamptz(3)
+  durationSeconds Int             @default(0) @map("duration_seconds")
+  ownerId         String?         @map("owner_id") @db.Uuid
+  contactId       String?         @map("contact_id") @db.Uuid
+  dealId          String?         @map("deal_id") @db.Uuid
+  recordingUrl    String?         @map("recording_url") @db.VarChar(512)
+  notes           String?         @db.Text
+  version         Int             @default(1)
+  createdAt       DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime        @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt       DateTime?       @map("deleted_at") @db.Timestamptz(3)
+  owner           User?           @relation("CallOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  contact         Contact?        @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  deal            Deal?           @relation(fields: [dealId], references: [id], onDelete: SetNull)
+
+  @@index([startedAt])
+  @@index([ownerId, startedAt])
+  @@index([contactId])
+  @@index([dealId])
+  @@index([direction, disposition])
+  @@index([deletedAt])
+  @@map("calls")
+}
+
+model BankStatement {
+  id             String            @id @default(uuid()) @db.Uuid
+  externalId     String            @unique @map("external_id") @db.VarChar(64)
+  accountLabel   String            @map("account_label") @db.VarChar(64)
+  periodStart    DateTime          @map("period_start") @db.Date
+  periodEnd      DateTime          @map("period_end") @db.Date
+  openingBalance Decimal           @default(0) @map("opening_balance") @db.Decimal(14, 2)
+  closingBalance Decimal           @default(0) @map("closing_balance") @db.Decimal(14, 2)
+  currency       String            @default("USD") @db.Char(3)
+  importedById   String?           @map("imported_by_id") @db.Uuid
+  importedAt     DateTime          @default(now()) @map("imported_at") @db.Timestamptz(3)
+  createdAt      DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime          @updatedAt @map("updated_at") @db.Timestamptz(3)
+  importedBy     User?             @relation("StatementImporter", fields: [importedById], references: [id], onDelete: SetNull)
+  transactions   BankTransaction[]
+
+  @@index([periodStart, periodEnd])
+  @@map("bank_statements")
+}
+
+model BankTransaction {
+  id                  String               @id @default(uuid()) @db.Uuid
+  statementId         String               @map("statement_id") @db.Uuid
+  externalId          String               @unique @map("external_id") @db.VarChar(64)
+  bookedAt            DateTime             @map("booked_at") @db.Timestamptz(3)
+  amount              Decimal              @db.Decimal(14, 2)
+  currency            String               @default("USD") @db.Char(3)
+  direction           TransactionDirection
+  counterpartyName    String               @map("counterparty_name") @db.VarChar(200)
+  counterpartyAccount String?              @map("counterparty_account") @db.VarChar(64)
+  reference           String               @db.VarChar(300)
+  matchStatus         PaymentMatchStatus   @default(UNMATCHED) @map("match_status")
+  matchedOrderId      String?              @map("matched_order_id") @db.Uuid
+  matchedById         String?              @map("matched_by_id") @db.Uuid
+  matchedAt           DateTime?            @map("matched_at") @db.Timestamptz(3)
+  version             Int                  @default(1)
+  createdAt           DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt           DateTime             @updatedAt @map("updated_at") @db.Timestamptz(3)
+  statement           BankStatement        @relation(fields: [statementId], references: [id], onDelete: Cascade)
+  matchedOrder        Order?               @relation(fields: [matchedOrderId], references: [id], onDelete: SetNull)
+  matchedBy           User?                @relation("TransactionMatcher", fields: [matchedById], references: [id], onDelete: SetNull)
+
+  @@index([statementId, bookedAt])
+  @@index([matchStatus, bookedAt])
+  @@index([matchedOrderId])
+  @@index([bookedAt])
+  @@map("bank_transactions")
 }
