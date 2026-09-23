@@ -18,6 +18,7 @@ describe('stub call provider', () => {
     const second = await createStubCallProvider().fetchCalls({ limit: 5 });
 
     expect(first).toEqual(second);
+    expect(first[0]?.startedAt).toBe('2026-01-02T09:00:00.000Z');
     expect(new Set(first.map((call) => call.externalId)).size).toBe(first.length);
   });
 

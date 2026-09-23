@@ -33,11 +33,11 @@ describe('stub bank provider', () => {
 
   it('numbers and dates the transactions the way the fixture says', () => {
     const { transactions } = buildStubStatement();
-    const anchor = Date.parse('2026-03-02T10:00:00.000Z');
+    const anchor = Date.parse('2026-01-02T10:00:00.000Z');
 
     transactions.forEach((transaction, index) => {
       expect(transaction.externalId).toBe(
-        `stub-txn-2026-03-${(index + 1).toString().padStart(4, '0')}`,
+        `stub-txn-2026-01-${(index + 1).toString().padStart(4, '0')}`,
       );
       expect(Date.parse(transaction.bookedAt)).toBe(anchor + index * 2 * DAY_MS);
     });

@@ -1,13 +1,21 @@
 import { z } from 'zod';
 
+import {
+  DEFAULT_REPORT_WINDOW_FROM,
+  DEFAULT_REPORT_WINDOW_TO,
+} from '../../common/reporting/index.js';
 import { analyticsPeriods, type DateRange } from './types.js';
 
 const DAY_MS = 86_400_000;
 
 /** Widest window a single report may scan, so one request cannot table-scan years. */
 export const MAX_RANGE_DAYS = 366;
-/** Window applied when the caller does not name one. */
-export const DEFAULT_RANGE_DAYS = 30;
+/**
+ * Window applied when the caller does not name one: a fixed month rather than
+ * a stretch measured backwards from the clock. See `common/reporting`.
+ */
+export const DEFAULT_RANGE_FROM = DEFAULT_REPORT_WINDOW_FROM;
+export const DEFAULT_RANGE_TO = DEFAULT_REPORT_WINDOW_TO;
 /** Hard ceiling for every `limit`; larger values are clamped, not rejected. */
 export const MAX_LIMIT = 100;
 export const DEFAULT_LIMIT = 10;
@@ -33,13 +41,15 @@ interface RangeInput {
   readonly to?: string | undefined;
 }
 
-// `to` defaults to now and `from` to a fixed window before it, so a caller may
-// send neither, either, or both.
-const applyRangeDefaults = <T extends RangeInput>(value: T): T & DateRange => {
-  const to = value.to ?? new Date().toISOString();
-  const from = value.from ?? new Date(Date.parse(to) - DEFAULT_RANGE_DAYS * DAY_MS).toISOString();
-  return { ...value, from, to };
-};
+// Each bound defaults on its own, so a caller may send neither, either, or
+// both. Neither default reads the clock: a report asked for without a window
+// covers the same month today and in a year, which is what makes two runs of
+// the same question comparable at all.
+const applyRangeDefaults = <T extends RangeInput>(value: T): T & DateRange => ({
+  ...value,
+  from: value.from ?? DEFAULT_RANGE_FROM,
+  to: value.to ?? DEFAULT_RANGE_TO,
+});
 
 const rangeIsOrdered = (value: DateRange): boolean => Date.parse(value.from) < Date.parse(value.to);
 

@@ -6,8 +6,8 @@ const instantSchema = {
   description: 'Дата або мітка часу ISO 8601; нормалізується до UTC.',
 };
 
-// `to` defaults to now and `from` to 30 days before it; the window may not
-// exceed 366 days and `from` must be earlier than `to`.
+// Missing bounds use the shared reporting default; the window may not exceed
+// 366 days and `from` must be earlier than `to`.
 const rangeParameters = [
   { name: 'from', in: 'query', schema: instantSchema },
   { name: 'to', in: 'query', schema: instantSchema },
@@ -21,7 +21,7 @@ const limitParameter = {
 };
 
 const rangeNote =
-  'Проміжок за замовчуванням — останні 30 днів; `from` має бути раніше за `to`, ' +
+  'Проміжок за замовчуванням — січень 2026; `from` має бути раніше за `to`, ' +
   'а вікно не може перевищувати 366 днів.';
 
 const report = (

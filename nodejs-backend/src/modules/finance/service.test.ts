@@ -129,7 +129,6 @@ interface HarnessOptions {
   readonly provider?: BankProvider;
   readonly byDirection?: readonly unknown[];
   readonly byStatus?: readonly unknown[];
-  readonly latestStatement?: StatementRow | null;
 }
 
 const createHarness = (options: HarnessOptions = {}) => {
@@ -171,9 +170,6 @@ const createHarness = (options: HarnessOptions = {}) => {
   const findOrders = jest.fn(async (_args: unknown) => options.orders ?? [orderRow]);
   const findTransactions = jest.fn(async (_args: unknown) => options.pending ?? [unmatchedRow]);
   const findStatements = jest.fn(async (_args: unknown) => [statementRow]);
-  const latestStatement = jest.fn(async (_args: unknown) =>
-    options.latestStatement === undefined ? statementRow : options.latestStatement,
-  );
   const groupBy = jest.fn(async (args: unknown) => {
     const { by } = args as { by: readonly string[] };
     return by[0] === 'direction'
@@ -201,7 +197,6 @@ const createHarness = (options: HarnessOptions = {}) => {
     bankStatement: {
       findMany: findStatements,
       count: jest.fn(async () => 1),
-      findFirst: latestStatement,
     },
     bankTransaction: {
       findFirst: readTransaction,
@@ -280,7 +275,7 @@ describe('finance service statement import', () => {
     expect(harness.transactionCreate).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({
-          externalId: 'stub-txn-2026-03-0001',
+          externalId: 'stub-txn-2026-01-0001',
           matchStatus: 'UNMATCHED',
         }),
       }),
@@ -311,7 +306,7 @@ describe('finance service statement import', () => {
 
   it('keeps importing the lines around one it already knows', async () => {
     const harness = createHarness({
-      storedExternalIds: ['stub-txn-2026-03-0001', 'stub-txn-2026-03-0002'],
+      storedExternalIds: ['stub-txn-2026-01-0001', 'stub-txn-2026-01-0002'],
     });
 
     await expect(harness.service.importStatement(access)).resolves.toEqual({
@@ -627,7 +622,7 @@ describe('finance service reconciliation', () => {
 
   it('files money that is going out rather than leaving it undecided', async () => {
     const harness = createHarness({
-      pending: [{ ...unmatchedRow, direction: 'DEBIT', reference: 'Office rent, February' }],
+      pending: [{ ...unmatchedRow, direction: 'DEBIT', reference: 'Office rent, January' }],
     });
 
     await expect(harness.service.reconcile(access)).resolves.toEqual({
@@ -725,21 +720,25 @@ describe('finance service summary', () => {
     });
   });
 
-  /*
-   * The requirement this was written for: nothing in this module may depend on
-   * the day it is run. A window defaulted to "the last thirty days" makes a
-   * ledger of March report an empty period from July onwards, and the module
-   * looks broken while behaving correctly.
-   */
-  it('takes its default window from the newest statement, not from the clock', async () => {
+  it('fills each absent bound from the shared January default', async () => {
     const harness = createHarness();
 
-    const report = await harness.service.summary(access, {});
-
-    expect(report.from).toBe('2026-01-01T00:00:00.000Z');
-    // The period ends on the 31st inclusive; the window is half-open, so it
-    // closes at the midnight after it.
-    expect(report.to).toBe('2026-02-01T00:00:00.000Z');
+    await expect(harness.service.summary(access, {})).resolves.toMatchObject({
+      from: '2026-01-01T00:00:00.000Z',
+      to: '2026-02-01T00:00:00.000Z',
+    });
+    await expect(
+      harness.service.summary(access, { from: '2026-01-15T00:00:00.000Z' }),
+    ).resolves.toMatchObject({
+      from: '2026-01-15T00:00:00.000Z',
+      to: '2026-02-01T00:00:00.000Z',
+    });
+    await expect(
+      harness.service.summary(access, { to: '2026-01-20T00:00:00.000Z' }),
+    ).resolves.toMatchObject({
+      from: '2026-01-01T00:00:00.000Z',
+      to: '2026-01-20T00:00:00.000Z',
+    });
   });
 
   it('keeps the window the caller named, statement or no statement', async () => {
@@ -752,16 +751,6 @@ describe('finance service summary', () => {
 
     expect(report.from).toBe('2026-03-01T00:00:00.000Z');
     expect(report.to).toBe('2026-04-01T00:00:00.000Z');
-  });
-
-  it('falls back to the recent past only when nothing has been imported', async () => {
-    const harness = createHarness({ latestStatement: null });
-
-    const report = await harness.service.summary(access, {});
-
-    // Whatever the window, the answer is empty; the fallback settles only what
-    // the report says it looked at.
-    expect(Date.parse(report.from)).toBeLessThan(Date.parse(report.to));
   });
 
   it('reports an empty period as zeroes rather than as nothing', async () => {
