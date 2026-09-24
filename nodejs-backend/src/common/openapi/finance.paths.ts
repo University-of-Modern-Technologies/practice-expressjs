@@ -270,6 +270,9 @@ export const financePaths = {
       ...securedOperation,
       tags: ['Finance'],
       summary: 'Підсумок надходжень і списань за період',
+      description:
+        'За відсутності меж періоду використовується січень 2026: від 2026-01-01T00:00:00.000Z ' +
+        'до 2026-02-01T00:00:00.000Z; явна межа має пріоритет над значенням за замовчуванням.',
       parameters: [
         { name: 'from', in: 'query', schema: timestampSchema },
         { name: 'to', in: 'query', schema: timestampSchema },

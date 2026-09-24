@@ -35,13 +35,13 @@ import type { TransactionDirection } from './types.js';
  */
 
 /** Identifier of the one statement the stub knows about. */
-export const STUB_STATEMENT_EXTERNAL_ID = 'stub-stmt-2026-03';
+export const STUB_STATEMENT_EXTERNAL_ID = 'stub-stmt-2026-01';
 
 /** How many transactions that statement carries. */
 export const STUB_TRANSACTION_COUNT = 12;
 
 /** Booking time of the first transaction. Fixed, so runs are reproducible. */
-const ANCHOR_ISO = '2026-03-02T10:00:00.000Z';
+const ANCHOR_ISO = '2026-01-02T10:00:00.000Z';
 
 /** Spacing between consecutive transactions. */
 const STEP_DAYS = 2;
@@ -129,14 +129,14 @@ const ROWS: readonly StubRow[] = [
     amount: '3200.00',
     counterpartyName: 'City Property Management',
     counterpartyAccount: 'ACCT-1009',
-    reference: 'Office rent, February',
+    reference: 'Office rent, January',
   },
   {
     direction: 'DEBIT',
     amount: '5400.00',
     counterpartyName: 'Payroll Services Ltd',
     counterpartyAccount: 'ACCT-1010',
-    reference: 'Payroll, February',
+    reference: 'Payroll, January',
   },
   {
     direction: 'DEBIT',
@@ -171,7 +171,7 @@ const bookedAtFor = (index: number): string =>
  * statement a different statement, which is what it is.
  */
 const externalIdFor = (index: number): string =>
-  `stub-txn-2026-03-${(index + 1).toString().padStart(4, '0')}`;
+  `stub-txn-2026-01-${(index + 1).toString().padStart(4, '0')}`;
 
 const transactionFor = (row: StubRow, index: number): BankProviderTransaction => ({
   externalId: externalIdFor(index),
@@ -205,8 +205,8 @@ export const buildStubStatement = (): BankProviderStatement => {
   return {
     externalId: STUB_STATEMENT_EXTERNAL_ID,
     accountLabel: 'Operating account',
-    periodStart: '2026-03-01',
-    periodEnd: '2026-03-31',
+    periodStart: '2026-01-01',
+    periodEnd: '2026-01-31',
     openingBalance: OPENING_BALANCE,
     closingBalance: closingBalanceFor(transactions),
     currency: CURRENCY,

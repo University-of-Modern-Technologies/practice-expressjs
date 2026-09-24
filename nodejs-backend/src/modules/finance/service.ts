@@ -9,7 +9,10 @@ import {
 } from '../../common/types/domain-event-publisher.js';
 import type { Prisma, PrismaDatabase, PrismaTransaction } from '../../db/prisma.js';
 import type { AuditService } from '../audit/service.js';
-import { DEFAULT_SUMMARY_RANGE_DAYS } from './validation.js';
+import {
+  DEFAULT_REPORT_WINDOW_FROM,
+  DEFAULT_REPORT_WINDOW_TO,
+} from '../../common/reporting/index.js';
 import {
   MATCHABLE_ORDER_STATUSES,
   amountsAgree,
@@ -239,8 +242,6 @@ const toDate = (value: string): Date => new Date(value);
  */
 export const RECONCILE_BATCH_SIZE = 200;
 
-const DAY_MS = 86_400_000;
-
 const contactNameOf = (order: CandidateOrderRecord): string | null =>
   order.contact === null ? null : `${order.contact.firstName} ${order.contact.lastName}`;
 
@@ -332,47 +333,12 @@ export const createFinanceService = (
     toDto: toTransactionDto,
   });
 
-  /**
-   * Fills in whichever bound the caller left out.
-   *
-   * The newest statement on file, not the clock. A ledger is a record of
-   * periods that happened, and "the summary, please" means the period there
-   * is data for — asked in March or asked two years later. Defaulting to the
-   * last thirty days instead makes the module answer honestly with zeroes and
-   * look broken, which is the worse of the two ways to be right.
-   *
-   * With nothing imported at all there is no period to name, and the window
-   * falls back to the recent past; either way the answer is empty, so the
-   * fallback settles only what the report echoes back.
-   */
-  const resolveSummaryWindow = async (
+  const resolveSummaryWindow = (
     query: FinanceSummaryQuery,
-  ): Promise<{ readonly from: string; readonly to: string }> => {
-    if (query.from !== undefined && query.to !== undefined) {
-      return { from: query.from, to: query.to };
-    }
-
-    const latest = await db.bankStatement.findFirst({
-      orderBy: [{ periodStart: 'desc' }, { id: 'asc' }],
-      select: { periodStart: true, periodEnd: true },
-    });
-
-    const fallbackTo = new Date();
-    // The period is inclusive of its last day; the window is half-open, so the
-    // upper bound is the midnight after it rather than the day itself.
-    const to =
-      query.to ??
-      (latest === null
-        ? fallbackTo.toISOString()
-        : new Date(latest.periodEnd.getTime() + DAY_MS).toISOString());
-    const from =
-      query.from ??
-      (latest === null
-        ? new Date(Date.parse(to) - DEFAULT_SUMMARY_RANGE_DAYS * DAY_MS).toISOString()
-        : latest.periodStart.toISOString());
-
-    return { from, to };
-  };
+  ): { readonly from: string; readonly to: string } => ({
+    from: query.from ?? DEFAULT_REPORT_WINDOW_FROM,
+    to: query.to ?? DEFAULT_REPORT_WINDOW_TO,
+  });
 
   const loadCandidateOrders = async (
     store: CandidateOrderStore,

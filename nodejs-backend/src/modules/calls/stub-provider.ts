@@ -17,7 +17,7 @@ import type { CallProvider, CallProviderRecord } from './provider.js';
 export const STUB_CALL_JOURNAL_SIZE = 25;
 
 /** Newest call in the generated journal. Fixed, so runs are reproducible. */
-const ANCHOR_ISO = '2026-01-01T09:00:00.000Z';
+const ANCHOR_ISO = '2026-01-02T09:00:00.000Z';
 
 /** Spacing between consecutive generated calls. */
 const STEP_MINUTES = 17;

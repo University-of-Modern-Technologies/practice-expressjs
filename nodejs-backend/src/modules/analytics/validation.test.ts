@@ -1,7 +1,8 @@
 import { describe, expect, it } from '@jest/globals';
 
 import {
-  DEFAULT_RANGE_DAYS,
+  DEFAULT_RANGE_FROM,
+  DEFAULT_RANGE_TO,
   MAX_LIMIT,
   MAX_RANGE_DAYS,
   dealFunnelSchema,
@@ -13,11 +14,22 @@ import {
 const DAY_MS = 86_400_000;
 
 describe('analytics query validation', () => {
-  it('defaults the range to the most recent window', () => {
+  /*
+   * The window used to be "the last thirty days", which made the answer to a
+   * question with no parameters depend on the day it was asked — and made a
+   * report of data that is a year old look like a report of nothing.
+   */
+  it('defaults the range to a fixed month rather than to the last thirty days', () => {
     const parsed = salesSummarySchema.parse({ query: {} });
-    const span = Date.parse(parsed.query.to) - Date.parse(parsed.query.from);
-    expect(span).toBe(DEFAULT_RANGE_DAYS * DAY_MS);
+    expect(parsed.query.from).toBe(DEFAULT_RANGE_FROM);
+    expect(parsed.query.to).toBe(DEFAULT_RANGE_TO);
     expect(parsed.query.period).toBe('day');
+  });
+
+  it('fills only the bound the caller left out', () => {
+    const parsed = salesSummarySchema.parse({ query: { from: '2026-01-01' } });
+    expect(parsed.query.from).toBe('2026-01-01T00:00:00.000Z');
+    expect(parsed.query.to).toBe(DEFAULT_RANGE_TO);
   });
 
   it('normalises dates to ISO 8601 and stays idempotent on a second parse', () => {

@@ -307,6 +307,9 @@ async function main(): Promise<void> {
         currency: 'USD',
         probability: 25,
         version: 1,
+        expectedCloseDate: new Date('2026-01-20T00:00:00.000Z'),
+        createdAt: new Date('2026-01-03T09:00:00.000Z'),
+        updatedAt: new Date('2026-01-04T09:00:00.000Z'),
       },
       {
         id: ids.deals.renewal,
@@ -318,6 +321,9 @@ async function main(): Promise<void> {
         currency: 'USD',
         probability: 75,
         version: 1,
+        expectedCloseDate: new Date('2026-01-25T00:00:00.000Z'),
+        createdAt: new Date('2026-01-07T09:00:00.000Z'),
+        updatedAt: new Date('2026-01-08T09:00:00.000Z'),
       },
       {
         id: ids.deals.pilot,
@@ -329,6 +335,9 @@ async function main(): Promise<void> {
         currency: 'USD',
         probability: 10,
         version: 1,
+        expectedCloseDate: new Date('2026-01-30T00:00:00.000Z'),
+        createdAt: new Date('2026-01-11T09:00:00.000Z'),
+        updatedAt: new Date('2026-01-12T09:00:00.000Z'),
       },
     ] as const;
 
@@ -468,8 +477,10 @@ async function main(): Promise<void> {
         discountTotal: '0.00',
         taxTotal: '0.00',
         total: '1800.00',
-        placedAt: new Date('2026-02-01T09:00:00.000Z'),
+        placedAt: new Date('2026-01-01T09:00:00.000Z'),
         version: 1,
+        createdAt: new Date('2026-01-01T09:00:00.000Z'),
+        updatedAt: new Date('2026-01-01T09:00:00.000Z'),
       },
       {
         id: ids.orders.draft,
@@ -485,6 +496,8 @@ async function main(): Promise<void> {
         total: '2400.00',
         placedAt: null,
         version: 1,
+        createdAt: new Date('2026-01-17T09:00:00.000Z'),
+        updatedAt: new Date('2026-01-17T09:00:00.000Z'),
       },
       {
         id: ids.orders.fulfilled,
@@ -500,6 +513,8 @@ async function main(): Promise<void> {
         total: '450.00',
         placedAt: new Date('2026-01-15T09:00:00.000Z'),
         version: 1,
+        createdAt: new Date('2026-01-15T09:00:00.000Z'),
+        updatedAt: new Date('2026-01-15T09:00:00.000Z'),
       },
       {
         id: ids.orders.settledCedar,
@@ -513,8 +528,10 @@ async function main(): Promise<void> {
         discountTotal: '0.00',
         taxTotal: '0.00',
         total: '2400.00',
-        placedAt: new Date('2026-02-03T09:00:00.000Z'),
+        placedAt: new Date('2026-01-03T09:00:00.000Z'),
         version: 1,
+        createdAt: new Date('2026-01-03T09:00:00.000Z'),
+        updatedAt: new Date('2026-01-03T09:00:00.000Z'),
       },
       {
         id: ids.orders.settledBluePeak,
@@ -528,8 +545,10 @@ async function main(): Promise<void> {
         discountTotal: '0.00',
         taxTotal: '0.00',
         total: '450.00',
-        placedAt: new Date('2026-02-05T09:00:00.000Z'),
+        placedAt: new Date('2026-01-05T09:00:00.000Z'),
         version: 1,
+        createdAt: new Date('2026-01-05T09:00:00.000Z'),
+        updatedAt: new Date('2026-01-05T09:00:00.000Z'),
       },
       {
         // Paid a cent short: the bank kept a transfer fee. This is the order
@@ -545,8 +564,10 @@ async function main(): Promise<void> {
         discountTotal: '0.00',
         taxTotal: '0.00',
         total: '1250.00',
-        placedAt: new Date('2026-02-07T09:00:00.000Z'),
+        placedAt: new Date('2026-01-07T09:00:00.000Z'),
         version: 1,
+        createdAt: new Date('2026-01-07T09:00:00.000Z'),
+        updatedAt: new Date('2026-01-07T09:00:00.000Z'),
       },
       {
         // Two orders, one customer, the same total. A payment naming only the
@@ -562,8 +583,10 @@ async function main(): Promise<void> {
         discountTotal: '0.00',
         taxTotal: '0.00',
         total: '990.00',
-        placedAt: new Date('2026-02-09T09:00:00.000Z'),
+        placedAt: new Date('2026-01-11T09:00:00.000Z'),
         version: 1,
+        createdAt: new Date('2026-01-11T09:00:00.000Z'),
+        updatedAt: new Date('2026-01-11T09:00:00.000Z'),
       },
       {
         id: ids.orders.twinCedarLate,
@@ -577,8 +600,10 @@ async function main(): Promise<void> {
         discountTotal: '0.00',
         taxTotal: '0.00',
         total: '990.00',
-        placedAt: new Date('2026-02-11T09:00:00.000Z'),
+        placedAt: new Date('2026-01-13T09:00:00.000Z'),
         version: 1,
+        createdAt: new Date('2026-01-13T09:00:00.000Z'),
+        updatedAt: new Date('2026-01-13T09:00:00.000Z'),
       },
       {
         id: ids.orders.wireBluePeak,
@@ -592,8 +617,10 @@ async function main(): Promise<void> {
         discountTotal: '0.00',
         taxTotal: '0.00',
         total: '777.00',
-        placedAt: new Date('2026-02-13T09:00:00.000Z'),
+        placedAt: new Date('2026-01-09T09:00:00.000Z'),
         version: 1,
+        createdAt: new Date('2026-01-09T09:00:00.000Z'),
+        updatedAt: new Date('2026-01-09T09:00:00.000Z'),
       },
       {
         // Placed far enough back that the payment quoting it falls outside the
@@ -611,6 +638,8 @@ async function main(): Promise<void> {
         total: '1500.00',
         placedAt: new Date('2025-10-01T09:00:00.000Z'),
         version: 1,
+        createdAt: new Date('2025-10-01T09:00:00.000Z'),
+        updatedAt: new Date('2025-10-01T09:00:00.000Z'),
       },
     ] as const;
 

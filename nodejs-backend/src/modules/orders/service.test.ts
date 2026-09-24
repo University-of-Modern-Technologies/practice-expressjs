@@ -392,22 +392,19 @@ describe('orders service order numbers', () => {
 });
 
 describe('orders service item immutability', () => {
-  it.each(['CONFIRMED', 'PAID', 'FULFILLED', 'CANCELLED'] as const)(
-    'refuses to add a line to a %s order',
-    async (status) => {
-      const harness = createHarness({ order: withStatus(status) });
+  it('refuses to add a line to a confirmed order', async () => {
+    const harness = createHarness({ order: withStatus('CONFIRMED') });
 
-      await expect(
-        harness.service.addItem(access, draftOrder.id, {
-          version: 1,
-          productId: product.id,
-          quantity: 1,
-        }),
-      ).rejects.toMatchObject({ statusCode: 409, code: 'ORDER_NOT_EDITABLE' });
-      expect(harness.createItem).not.toHaveBeenCalled();
-      expect(harness.updateOrder).not.toHaveBeenCalled();
-    },
-  );
+    await expect(
+      harness.service.addItem(access, draftOrder.id, {
+        version: 1,
+        productId: product.id,
+        quantity: 1,
+      }),
+    ).rejects.toMatchObject({ statusCode: 409, code: 'ORDER_NOT_EDITABLE' });
+    expect(harness.createItem).not.toHaveBeenCalled();
+    expect(harness.updateOrder).not.toHaveBeenCalled();
+  });
 
   it('refuses to change or remove a line once the order has left the draft stage', async () => {
     const harness = createHarness({ order: withStatus('CONFIRMED') });

@@ -120,8 +120,8 @@ describe('matching validation', () => {
 
 describe('summary validation', () => {
   // The window used to be filled in here, from the clock. It is now left
-  // alone, because what it should default to is a fact about the data — the
-  // newest statement on file — and only the service can see that.
+  // alone, because the service fills missing bounds from the shared reporting
+  // default.
   it('accepts a request that names no window, and invents none', () => {
     const parsed = financeSummarySchema.safeParse({ query: {} });
     expect(parsed.success).toBe(true);

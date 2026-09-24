@@ -163,8 +163,8 @@ export interface TransactionListResult {
  * Half-open interval `[from, to)`, as the caller asked for it.
  *
  * Either bound may be absent, and an absent bound is resolved by the service
- * from the newest statement on file rather than from the clock. The report
- * echoes back the window it actually used.
+ * from the shared reporting default. The report echoes back the window it
+ * actually used.
  */
 export interface FinanceSummaryQuery {
   readonly from?: string | undefined;

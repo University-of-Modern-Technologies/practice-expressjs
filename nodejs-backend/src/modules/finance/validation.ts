@@ -21,9 +21,6 @@ const money = z
 
 /** Widest window a summary may scan, so one request cannot table-scan years. */
 export const MAX_SUMMARY_RANGE_DAYS = 366;
-/** Window applied when the caller does not name one. */
-export const DEFAULT_SUMMARY_RANGE_DAYS = 30;
-
 const DAY_MS = 86_400_000;
 
 export const listStatementsSchema = z.object({
@@ -113,10 +110,9 @@ const isoInstant = z
  *
  * They used to be defaulted at this point, against the clock: `to` became
  * "now" and `from` a month before it. That made the answer to a question with
- * no parameters depend on the day it was asked — a ledger of March, read in
- * September, reported an empty period for ever. What the window should default
- * to is a fact about the data, not about the calendar, so the decision moved
- * to the service, which can see the data.
+ * no parameters depend on the day it was asked — a ledger read months later
+ * reported an empty period for ever. The reporting default is a shared
+ * constant, so the decision stays in the service rather than the validator.
  *
  * The two checks below therefore apply only to a window the caller actually
  * named. A caller who names nothing is not making a claim to contradict.
