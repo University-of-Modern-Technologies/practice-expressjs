@@ -71,11 +71,26 @@ describe('Фінанси — підсумок за період', () => {
   // Money crosses the wire as a string and is rendered through the shared
   // formatter; the section must not grow a formatter of its own.
   it('показує надходження й списання як гроші, а не як числа', async () => {
+    vi.mocked(http.get).mockImplementation((path: string) =>
+      path === '/finance/summary'
+        ? (Promise.resolve(summary) as never)
+        : (new Promise(() => undefined) as never),
+    );
+
     showOverview(['finance:read']);
 
     expect(await screen.findByText('Надходження')).toBeInTheDocument();
     expect(screen.getByText('Списання')).toBeInTheDocument();
     expect(screen.getByText(/9\s?000,00/)).toBeInTheDocument();
+    expect(http.get).toHaveBeenCalledWith(
+      '/finance/summary',
+      expect.objectContaining({
+        params: {
+          from: '2026-01-01T00:00:00.000Z',
+          to: '2026-02-01T00:00:00.000Z',
+        },
+      }),
+    );
   });
 
   it('показує кількість транзакцій за період', async () => {
