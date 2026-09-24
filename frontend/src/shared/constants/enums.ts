@@ -82,6 +82,25 @@ export const TICKET_STATUS_TRANSITIONS: Readonly<Record<TicketStatus, readonly T
   CLOSED: [],
 };
 
+export const CALL_DIRECTIONS = ['INBOUND', 'OUTBOUND'] as const;
+export type CallDirection = (typeof CALL_DIRECTIONS)[number];
+
+export const CALL_DISPOSITIONS = ['ANSWERED', 'NO_ANSWER', 'BUSY', 'FAILED', 'VOICEMAIL'] as const;
+export type CallDisposition = (typeof CALL_DISPOSITIONS)[number];
+
+export const CALL_DIRECTION: Readonly<Record<CallDirection, StatusMeta>> = {
+  INBOUND: { label: 'Вхідний', color: 'processing' },
+  OUTBOUND: { label: 'Вихідний', color: 'default' },
+};
+
+export const CALL_DISPOSITION: Readonly<Record<CallDisposition, StatusMeta>> = {
+  ANSWERED: { label: 'Відповіли', color: 'success' },
+  NO_ANSWER: { label: 'Без відповіді', color: 'warning' },
+  BUSY: { label: 'Зайнято', color: 'warning' },
+  FAILED: { label: 'Помилка звʼязку', color: 'error' },
+  VOICEMAIL: { label: 'Голосова пошта', color: 'default' },
+};
+
 /** Probability the API demands for a terminal stage; null means it is free. */
 export const DEAL_STAGE_PROBABILITY: Readonly<Record<DealStage, number | null>> = {
   LEAD: null,

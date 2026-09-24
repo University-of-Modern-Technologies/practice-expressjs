@@ -1,5 +1,9 @@
 export { FONT_FAMILY, FONT_FAMILY_MONO, PALETTE, RADIUS, SURFACE } from './theme';
 export {
+  CALL_DIRECTION,
+  CALL_DIRECTIONS,
+  CALL_DISPOSITION,
+  CALL_DISPOSITIONS,
   CIRCUIT_STATE,
   CIRCUIT_STATES,
   DEAL_STAGE,
@@ -26,6 +30,8 @@ export {
   TICKET_STATUSES,
   isOrderEditable,
   statusMeta,
+  type CallDirection,
+  type CallDisposition,
   type CircuitState,
   type DealStage,
   type InquiryCategory,
