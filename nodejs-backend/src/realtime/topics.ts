@@ -13,7 +13,15 @@ export const realtimeCollectionTopics = [REALTIME_TOPIC_DEALS, REALTIME_TOPIC_OR
 
 export type RealtimeCollectionTopic = (typeof realtimeCollectionTopics)[number];
 
-export const realtimeEntityTypes = ['deal', 'order', 'contact', 'user'] as const;
+export const realtimeEntityTypes = [
+  'deal',
+  'order',
+  'contact',
+  'user',
+  'ticket',
+  'call',
+  'transaction',
+] as const;
 
 export type RealtimeEntityType = (typeof realtimeEntityTypes)[number];
 
@@ -118,6 +126,9 @@ const ENTITY_TYPE_RESOURCES: Readonly<Record<RealtimeEntityType, string>> = {
   order: 'orders',
   contact: 'contacts',
   user: 'users',
+  ticket: 'helpdesk',
+  call: 'calls',
+  transaction: 'finance',
 };
 
 /**
