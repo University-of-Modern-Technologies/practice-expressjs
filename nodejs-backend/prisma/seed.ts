@@ -23,6 +23,12 @@ const ids = {
     licence: '40000000-0000-4000-8000-000000000001',
     workshop: '40000000-0000-4000-8000-000000000002',
     support: '40000000-0000-4000-8000-000000000003',
+    // Neither of these carries a real business meaning — they exist so a
+    // change that reads "may this product be archived" has one case that
+    // says yes without any preparation and one closed-order-only case to
+    // read, instead of forcing every test to build that state itself.
+    unblocked: '40000000-0000-4000-8000-000000000004',
+    closedOrderOnly: '40000000-0000-4000-8000-000000000005',
   },
   warehouses: {
     central: '50000000-0000-4000-8000-000000000001',
@@ -31,11 +37,13 @@ const ids = {
   orders: {
     confirmed: '60000000-0000-4000-8000-000000000001',
     draft: '60000000-0000-4000-8000-000000000002',
+    fulfilled: '60000000-0000-4000-8000-000000000003',
   },
   orderItems: {
     confirmedLicence: '70000000-0000-4000-8000-000000000001',
     confirmedSupport: '70000000-0000-4000-8000-000000000002',
     draftWorkshop: '70000000-0000-4000-8000-000000000003',
+    fulfilledClosedOrderOnly: '70000000-0000-4000-8000-000000000004',
   },
 } as const;
 
@@ -334,6 +342,24 @@ async function main(): Promise<void> {
         unitPrice: '600.00',
         currency: 'USD',
       },
+      {
+        id: ids.products.unblocked,
+        sku: 'LIC-LEGACY-04',
+        name: 'Legacy licence, discontinued',
+        description: 'Superseded by the team licence; nothing open references it.',
+        category: 'Licences',
+        unitPrice: '900.00',
+        currency: 'USD',
+      },
+      {
+        id: ids.products.closedOrderOnly,
+        sku: 'SRV-PILOT-05',
+        name: 'One-time pilot engagement',
+        description: 'A single delivered engagement; its only order is fulfilled.',
+        category: 'Services',
+        unitPrice: '450.00',
+        currency: 'USD',
+      },
     ] as const;
 
     for (const product of products) {
@@ -375,6 +401,18 @@ async function main(): Promise<void> {
         productId: ids.products.workshop,
         quantityOnHand: 15,
         quantityReserved: 3,
+      },
+      {
+        warehouseId: ids.warehouses.central,
+        productId: ids.products.unblocked,
+        quantityOnHand: 6,
+        quantityReserved: 0,
+      },
+      {
+        warehouseId: ids.warehouses.central,
+        productId: ids.products.closedOrderOnly,
+        quantityOnHand: 4,
+        quantityReserved: 0,
       },
     ] as const;
 
@@ -422,6 +460,21 @@ async function main(): Promise<void> {
         placedAt: null,
         version: 1,
       },
+      {
+        id: ids.orders.fulfilled,
+        orderNumber: 'ORD-2026-0003',
+        ownerId: ids.users.manager,
+        contactId: ids.contacts.bluePeak,
+        dealId: null,
+        status: OrderStatus.FULFILLED,
+        currency: 'USD',
+        subtotal: '450.00',
+        discountTotal: '0.00',
+        taxTotal: '0.00',
+        total: '450.00',
+        placedAt: new Date('2026-01-15T09:00:00.000Z'),
+        version: 1,
+      },
     ] as const;
 
     for (const order of orders) {
@@ -462,6 +515,16 @@ async function main(): Promise<void> {
         quantity: 1,
         unitPrice: '2400.00',
         lineTotal: '2400.00',
+      },
+      {
+        id: ids.orderItems.fulfilledClosedOrderOnly,
+        orderId: ids.orders.fulfilled,
+        productId: ids.products.closedOrderOnly,
+        sku: 'SRV-PILOT-05',
+        name: 'One-time pilot engagement',
+        quantity: 1,
+        unitPrice: '450.00',
+        lineTotal: '450.00',
       },
     ] as const;
 

@@ -9,6 +9,7 @@ const config: Config = {
   moduleNameMapper: {
     '^(\\.{1,2}/.*)\\.js$': '$1',
   },
+  globalTeardown: '<rootDir>/src/test/report-integration-tier.ts',
   testEnvironment: 'node',
   testMatch: ['<rootDir>/src/**/*.test.ts'],
   transform: {

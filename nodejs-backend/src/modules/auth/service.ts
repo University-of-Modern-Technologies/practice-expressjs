@@ -203,7 +203,7 @@ export const authConfigFromEnv = (): AuthConfig => {
   return {
     accessTokenSecret,
     accessTokenTtlSeconds: Number(process.env.JWT_ACCESS_TTL_SECONDS ?? 900),
-    refreshTokenTtlSeconds: Number(process.env.REFRESH_TOKEN_TTL_SECONDS ?? 2_592_000),
+    refreshTokenTtlSeconds: Number(process.env.REFRESH_TOKEN_TTL_SECONDS ?? 7 * 24 * 60 * 60),
     refreshCookieName: process.env.REFRESH_COOKIE_NAME ?? 'refresh_token',
     refreshCookiePath: '/api/auth',
     secureCookies: process.env.NODE_ENV === 'production',
