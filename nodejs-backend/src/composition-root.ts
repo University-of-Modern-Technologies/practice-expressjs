@@ -51,6 +51,12 @@ import {
   type AuthConfig,
 } from './modules/auth/index.js';
 import {
+  createCallProvider,
+  createCallsController,
+  createCallsRouter,
+  createCallsService,
+} from './modules/calls/index.js';
+import {
   createContactsController,
   createContactsRouter,
   createContactsService,
@@ -268,6 +274,25 @@ const createModules = ({
     createDealsService(prisma, auditService, publisher),
     rbacService,
   );
+  const callsController = createCallsController(
+    createCallsService(
+      prisma,
+      auditService,
+      createCallProvider({
+        config: {
+          baseUrl: config.callProviderBaseUrl,
+          apiKey: config.callProviderApiKey,
+          timeoutMs: config.callProviderTimeoutMs,
+          maxAttempts: config.callProviderMaxAttempts,
+          backoffMs: config.callProviderBackoffMs,
+        },
+        logger,
+      }),
+      publisher,
+      { syncBatchSize: config.callSyncBatchSize },
+    ),
+    rbacService,
+  );
   const helpdeskController = createHelpdeskController(
     createHelpdeskService(prisma, auditService, publisher),
     rbacService,
@@ -338,6 +363,7 @@ const createModules = ({
       { path: '/api/v1/deals', router: createDealsRouter(dealsController, authenticate) },
       { path: '/api/v1/audit', router: createAuditRouter(auditController, authenticate) },
       { path: '/api/v1/helpdesk', router: createHelpdeskRouter(helpdeskController, authenticate) },
+      { path: '/api/v1/calls', router: createCallsRouter(callsController, authenticate) },
       { path: '/api/v1/products', router: createProductsRouter(productsController, authenticate) },
       { path: '/api/v1/orders', router: createOrdersRouter(ordersController, authenticate) },
       {
