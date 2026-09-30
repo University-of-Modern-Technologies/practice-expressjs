@@ -145,7 +145,7 @@ export function AppShell({ children }: { children: ReactNode }) {
               <button
                 type="button"
                 aria-label="Обліковий запис"
-                className="flex items-center gap-2"
+                className="flex cursor-pointer items-center gap-2 border-0 bg-transparent p-0 text-inherit"
               >
                 <Avatar size={32} style={{ background: 'var(--crm-color-primary)' }}>
                   {user?.name?.charAt(0).toUpperCase() ?? '?'}

@@ -1,7 +1,8 @@
 /**
  * The single source of the palette. Ant Design reads it through ConfigProvider
- * and Tailwind mirrors the same values in globals.css, so a utility class and a
- * component can never drift to different shades of the same colour.
+ * and emits it as --crm-* CSS variables; the Tailwind colours in globals.css
+ * point at those variables, so a utility class and a component can never drift
+ * to different shades of the same colour.
  */
 export const PALETTE = {
   primary: '#4F46E5',

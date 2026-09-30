@@ -24,8 +24,10 @@ export function AntdProvider({ children }: { children: ReactNode }) {
       theme={{
         algorithm: appearance === 'dark' ? theme.darkAlgorithm : theme.defaultAlgorithm,
         // Emitting CSS variables keeps the stylesheet stable across renders and
-        // lets plain CSS read the same tokens the components use.
-        cssVar: { key: 'crm' },
+        // lets plain CSS read the same tokens the components use. The prefix is
+        // what names the variables (--crm-color-primary); the key only names
+        // the scope class, which the root layout puts on <body>.
+        cssVar: { key: 'crm', prefix: 'crm' },
         hashed: false,
         token: {
           colorPrimary: PALETTE.primary,
