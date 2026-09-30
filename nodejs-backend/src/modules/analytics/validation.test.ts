@@ -1,8 +1,9 @@
 import { describe, expect, it } from '@jest/globals';
 
+import { defaultReportWindowTo } from '../../common/reporting/index.js';
+
 import {
   DEFAULT_RANGE_FROM,
-  DEFAULT_RANGE_TO,
   MAX_LIMIT,
   MAX_RANGE_DAYS,
   dealFunnelSchema,
@@ -15,21 +16,22 @@ const DAY_MS = 86_400_000;
 
 describe('analytics query validation', () => {
   /*
-   * The window used to be "the last thirty days", which made the answer to a
-   * question with no parameters depend on the day it was asked — and made a
-   * report of data that is a year old look like a report of nothing.
+   * A window measured back from the clock would lose the demonstration data.
+   * The start stays where the data begins, and the end covers today, so a
+   * record entered this morning is in the report asked for this afternoon.
    */
-  it('defaults the range to a fixed month rather than to the last thirty days', () => {
+  it('defaults the range to a fixed start and the end of today', () => {
     const parsed = salesSummarySchema.parse({ query: {} });
     expect(parsed.query.from).toBe(DEFAULT_RANGE_FROM);
-    expect(parsed.query.to).toBe(DEFAULT_RANGE_TO);
+    expect(parsed.query.to).toBe(defaultReportWindowTo());
+    expect(Date.parse(parsed.query.to)).toBeGreaterThan(Date.now());
     expect(parsed.query.period).toBe('day');
   });
 
   it('fills only the bound the caller left out', () => {
     const parsed = salesSummarySchema.parse({ query: { from: '2026-01-01' } });
     expect(parsed.query.from).toBe('2026-01-01T00:00:00.000Z');
-    expect(parsed.query.to).toBe(DEFAULT_RANGE_TO);
+    expect(parsed.query.to).toBe(defaultReportWindowTo());
   });
 
   it('normalises dates to ISO 8601 and stays idempotent on a second parse', () => {

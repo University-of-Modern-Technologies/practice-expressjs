@@ -36,6 +36,8 @@ export interface CreateAppOptions {
   readonly rateLimiter?: RequestHandler;
   /** Stricter budget for credential endpoints. */
   readonly authRateLimiter?: RequestHandler;
+  /** Drops cached reads after a successful write; omitted where nothing is cached. */
+  readonly cacheInvalidation?: RequestHandler;
 }
 
 const AUTH_PATH = '/api/v1/auth';
@@ -60,6 +62,7 @@ export const createApp = ({
   metrics,
   rateLimiter,
   authRateLimiter,
+  cacheInvalidation,
 }: CreateAppOptions): Express => {
   const app = express();
 
@@ -84,6 +87,7 @@ export const createApp = ({
   app.use('/docs', swaggerUi.serve, swaggerUi.setup(openApiDocument, { explorer: true }));
 
   if (authRateLimiter) app.use(AUTH_PATH, authRateLimiter);
+  if (cacheInvalidation) app.use(cacheInvalidation);
 
   for (const mountedRouter of routers) {
     app.use(mountedRouter.path, mountedRouter.router);
