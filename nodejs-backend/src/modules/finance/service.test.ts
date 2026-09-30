@@ -1,6 +1,7 @@
 import { describe, expect, it, jest } from '@jest/globals';
 
 import { AppError } from '../../common/errors/index.js';
+import { defaultReportWindowTo } from '../../common/reporting/index.js';
 import type { DomainEventNotification, DomainEventPublisher } from '../../common/types/index.js';
 import type { AuditService } from '../audit/service.js';
 import { bankProviderUnavailableError, type BankProvider } from './provider.js';
@@ -720,18 +721,18 @@ describe('finance service summary', () => {
     });
   });
 
-  it('fills each absent bound from the shared January default', async () => {
+  it('fills each absent bound from the shared default: 1 January to today', async () => {
     const harness = createHarness();
 
     await expect(harness.service.summary(access, {})).resolves.toMatchObject({
       from: '2026-01-01T00:00:00.000Z',
-      to: '2026-02-01T00:00:00.000Z',
+      to: defaultReportWindowTo(),
     });
     await expect(
       harness.service.summary(access, { from: '2026-01-15T00:00:00.000Z' }),
     ).resolves.toMatchObject({
       from: '2026-01-15T00:00:00.000Z',
-      to: '2026-02-01T00:00:00.000Z',
+      to: defaultReportWindowTo(),
     });
     await expect(
       harness.service.summary(access, { to: '2026-01-20T00:00:00.000Z' }),

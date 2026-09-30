@@ -1,3 +1,8 @@
+export {
+  createCacheInvalidation,
+  type CacheInvalidationOptions,
+  type PrefixInvalidator,
+} from './cache-invalidation.js';
 export { createErrorHandler } from './error-handler.js';
 export { notFoundHandler } from './not-found.js';
 export {

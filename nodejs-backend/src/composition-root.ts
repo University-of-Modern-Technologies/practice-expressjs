@@ -4,6 +4,7 @@ import type { Logger } from 'pino';
 import { createApp, type MountedRouter, type ReadinessCheck } from './app/index.js';
 import { createDatabaseReadinessCheck } from './app/health/index.js';
 import { createRedisClient, disconnectRedis, type CacheService } from './cache/index.js';
+import { createCacheInvalidation } from './common/middleware/index.js';
 import { createRateLimiter, createAuthRateLimiter } from './common/middleware/rate-limit.js';
 import {
   createMetricsRegistry,
@@ -33,6 +34,7 @@ import {
   type AiProvider,
 } from './modules/ai/index.js';
 import {
+  analyticsPrefix,
   createAnalyticsController,
   createAnalyticsRouter,
   createAnalyticsService,
@@ -446,6 +448,11 @@ export const createCompositionRoot = (config: AppConfig): CompositionRoot => {
     readinessChecks,
     metrics,
     ...throttling,
+    cacheInvalidation: createCacheInvalidation({
+      cache,
+      prefixes: [analyticsPrefix()],
+      exemptPathPrefixes: ['/api/v1/auth'],
+    }),
   });
 
   return {

@@ -58,13 +58,11 @@ export interface AnalyticsService {
 /**
  * These are the slow queries of the system, so every report is cached.
  *
- * Invalidation story, stated honestly: entries are NOT dropped when an order,
- * deal or stock level changes. Doing so would mean invalidating a key space
- * that depends on caller-chosen date ranges, and the write path would have to
- * know about every report. Reports expire on time instead, which means a report
- * may lag behind the database by at most the TTL below. That trade is
- * acceptable for aggregate reporting and unacceptable for anything
- * transactional, which is why nothing transactional is served from here.
+ * Invalidation is deliberately coarse: every successful write drops the whole
+ * analytics namespace (see `common/middleware/cache-invalidation`). The write
+ * path would otherwise have to know which report each change moves, across key
+ * spaces built from caller-chosen date ranges. The TTL below is then only a
+ * backstop for changes that bypass the API.
  */
 const DEFAULT_ANALYTICS_TTL_SECONDS = 60;
 
