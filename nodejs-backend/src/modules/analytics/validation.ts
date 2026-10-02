@@ -2,20 +2,20 @@ import { z } from 'zod';
 
 import {
   DEFAULT_REPORT_WINDOW_FROM,
-  DEFAULT_REPORT_WINDOW_TO,
+  MAX_REPORT_WINDOW_DAYS,
+  defaultReportWindowTo,
 } from '../../common/reporting/index.js';
 import { analyticsPeriods, type DateRange } from './types.js';
 
 const DAY_MS = 86_400_000;
 
-/** Widest window a single report may scan, so one request cannot table-scan years. */
-export const MAX_RANGE_DAYS = 366;
+/** Widest window a single report may scan. See `common/reporting`. */
+export const MAX_RANGE_DAYS = MAX_REPORT_WINDOW_DAYS;
 /**
- * Window applied when the caller does not name one: a fixed month rather than
- * a stretch measured backwards from the clock. See `common/reporting`.
+ * Start of the window applied when the caller does not name one; the end is
+ * today. See `common/reporting`.
  */
 export const DEFAULT_RANGE_FROM = DEFAULT_REPORT_WINDOW_FROM;
-export const DEFAULT_RANGE_TO = DEFAULT_REPORT_WINDOW_TO;
 /** Hard ceiling for every `limit`; larger values are clamped, not rejected. */
 export const MAX_LIMIT = 100;
 export const DEFAULT_LIMIT = 10;
@@ -42,13 +42,12 @@ interface RangeInput {
 }
 
 // Each bound defaults on its own, so a caller may send neither, either, or
-// both. Neither default reads the clock: a report asked for without a window
-// covers the same month today and in a year, which is what makes two runs of
-// the same question comparable at all.
+// both. The start is fixed and the end is the close of today, so a report asked
+// for without a window includes what was entered today.
 const applyRangeDefaults = <T extends RangeInput>(value: T): T & DateRange => ({
   ...value,
   from: value.from ?? DEFAULT_RANGE_FROM,
-  to: value.to ?? DEFAULT_RANGE_TO,
+  to: value.to ?? defaultReportWindowTo(),
 });
 
 const rangeIsOrdered = (value: DateRange): boolean => Date.parse(value.from) < Date.parse(value.to);

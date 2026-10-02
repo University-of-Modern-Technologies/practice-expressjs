@@ -1,4 +1,6 @@
 import { z } from 'zod';
+
+import { MAX_REPORT_WINDOW_DAYS } from '../../common/reporting/index.js';
 import {
   paymentMatchStatuses,
   statementSortFields,
@@ -19,8 +21,11 @@ const money = z
   .trim()
   .regex(/^\d{1,12}(?:\.\d{1,2})?$/, 'Invalid monetary amount');
 
-/** Widest window a summary may scan, so one request cannot table-scan years. */
-export const MAX_SUMMARY_RANGE_DAYS = 366;
+/**
+ * Widest window a summary may scan: the shared reporting ceiling, so the
+ * default window, which ends today, is always one the summary accepts.
+ */
+export const MAX_SUMMARY_RANGE_DAYS = MAX_REPORT_WINDOW_DAYS;
 const DAY_MS = 86_400_000;
 
 export const listStatementsSchema = z.object({

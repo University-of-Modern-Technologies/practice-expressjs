@@ -1,3 +1,4 @@
+import { DEFAULT_REPORT_WINDOW_LABEL, MAX_REPORT_WINDOW_DAYS } from '../reporting/index.js';
 import { dataResponse, securedErrors, securedOperation } from './helpers.js';
 
 const instantSchema = {
@@ -7,7 +8,7 @@ const instantSchema = {
 };
 
 // Missing bounds use the shared reporting default; the window may not exceed
-// 366 days and `from` must be earlier than `to`.
+// the shared ceiling and `from` must be earlier than `to`.
 const rangeParameters = [
   { name: 'from', in: 'query', schema: instantSchema },
   { name: 'to', in: 'query', schema: instantSchema },
@@ -21,8 +22,8 @@ const limitParameter = {
 };
 
 const rangeNote =
-  'Проміжок за замовчуванням — січень 2026; `from` має бути раніше за `to`, ' +
-  'а вікно не може перевищувати 366 днів.';
+  `Проміжок за замовчуванням — ${DEFAULT_REPORT_WINDOW_LABEL}; \`from\` має бути раніше за \`to\`, ` +
+  `а вікно не може перевищувати ${String(MAX_REPORT_WINDOW_DAYS)} днів.`;
 
 const report = (
   summary: string,

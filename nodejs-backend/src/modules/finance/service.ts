@@ -9,10 +9,7 @@ import {
 } from '../../common/types/domain-event-publisher.js';
 import type { Prisma, PrismaDatabase, PrismaTransaction } from '../../db/prisma.js';
 import type { AuditService } from '../audit/service.js';
-import {
-  DEFAULT_REPORT_WINDOW_FROM,
-  DEFAULT_REPORT_WINDOW_TO,
-} from '../../common/reporting/index.js';
+import { DEFAULT_REPORT_WINDOW_FROM, defaultReportWindowTo } from '../../common/reporting/index.js';
 import {
   MATCHABLE_ORDER_STATUSES,
   amountsAgree,
@@ -337,7 +334,7 @@ export const createFinanceService = (
     query: FinanceSummaryQuery,
   ): { readonly from: string; readonly to: string } => ({
     from: query.from ?? DEFAULT_REPORT_WINDOW_FROM,
-    to: query.to ?? DEFAULT_REPORT_WINDOW_TO,
+    to: query.to ?? defaultReportWindowTo(),
   });
 
   const loadCandidateOrders = async (
