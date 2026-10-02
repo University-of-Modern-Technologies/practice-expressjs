@@ -52,6 +52,22 @@ body {
   font-family: var(--font-sans);
 }
 
+/*
+ * The page background before the component library has drawn anything.
+ * next-themes sets the class before the first paint, so a dark-theme user
+ * never sees a white frame while the session is being restored. The values
+ * mirror SURFACE.*.background in shared/constants/theme.ts.
+ */
+html.light body {
+  background: #f7f7fb;
+}
+
+html.dark body {
+  background: #16161d;
+  color: rgba(255, 255, 255, 0.85);
+  color-scheme: dark;
+}
+
 /* Identifiers, quantities and money are read digit by digit — never proportional. */
 .numeric {
   font-family: var(--font-mono);
