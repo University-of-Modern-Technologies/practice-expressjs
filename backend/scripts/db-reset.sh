@@ -3,7 +3,33 @@
 # Refuses to run against a production environment.
 set -eu
 
-. "$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)/lib/common.sh"
+PROJECT_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+
+log() {
+  printf '[%s] %s\n' "$(date '+%H:%M:%S')" "$*" >&2
+}
+
+die() {
+  printf 'error: %s\n' "$*" >&2
+  exit 1
+}
+
+require_command() {
+  command -v "$1" >/dev/null 2>&1 || die "required command not found: $1"
+}
+
+# Reads a variable from .env without sourcing the file: values may contain
+# characters that sh would interpret.
+env_value() {
+  value=$(
+    if [ -f "$PROJECT_ROOT/.env" ]; then
+      sed -n "s/^[[:space:]]*$1=//p" "$PROJECT_ROOT/.env" | tail -n 1
+    fi
+  )
+  value=${value%\"}
+  value=${value#\"}
+  printf '%s\n' "${value:-${2-}}"
+}
 
 usage() {
   cat <<'USAGE'

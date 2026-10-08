@@ -15,6 +15,8 @@
  * roles are looked up by name rather than created here.
  */
 
+import 'dotenv/config';
+
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -174,8 +176,11 @@ function read<T>(file: string): T[] {
 const at = (value: string | null): Date | null => (value === null ? null : new Date(value));
 
 function getSeedPassword(): string {
-  if (process.env.NODE_ENV === 'production') {
-    throw new Error('The demonstration seed is local-only and cannot run in production.');
+  // The production stack is a training stand, so it may be seeded on purpose.
+  if (process.env.NODE_ENV === 'production' && process.env.SEED_ALLOW_PRODUCTION !== 'true') {
+    throw new Error(
+      'The demonstration seed runs in production only with SEED_ALLOW_PRODUCTION=true.',
+    );
   }
 
   const password = process.env.SEED_USER_PASSWORD;
@@ -212,7 +217,9 @@ async function clearPreviousRun(ids: Record<string, string[]>): Promise<void> {
     }
   };
 
-  await remove('auditLogs', (values) => prisma.auditLog.deleteMany({ where: { id: { in: values } } }));
+  await remove('auditLogs', (values) =>
+    prisma.auditLog.deleteMany({ where: { id: { in: values } } }),
+  );
   await remove('stockMovements', (values) =>
     prisma.stockMovement.deleteMany({ where: { id: { in: values } } }),
   );
@@ -226,9 +233,13 @@ async function clearPreviousRun(ids: Record<string, string[]>): Promise<void> {
   await remove('warehouses', (values) =>
     prisma.warehouse.deleteMany({ where: { id: { in: values } } }),
   );
-  await remove('products', (values) => prisma.product.deleteMany({ where: { id: { in: values } } }));
+  await remove('products', (values) =>
+    prisma.product.deleteMany({ where: { id: { in: values } } }),
+  );
   await remove('deals', (values) => prisma.deal.deleteMany({ where: { id: { in: values } } }));
-  await remove('contacts', (values) => prisma.contact.deleteMany({ where: { id: { in: values } } }));
+  await remove('contacts', (values) =>
+    prisma.contact.deleteMany({ where: { id: { in: values } } }),
+  );
   await remove('users', (values) =>
     prisma.userRole.deleteMany({ where: { userId: { in: values } } }),
   );

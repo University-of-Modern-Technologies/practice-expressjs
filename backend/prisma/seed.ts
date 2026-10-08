@@ -1,3 +1,5 @@
+import 'dotenv/config';
+
 import { DealStage, OrderStatus, PermissionScope, PrismaClient } from '@prisma/client';
 import { hash } from 'bcryptjs';
 
@@ -105,8 +107,9 @@ async function hashPassword(password: string): Promise<string> {
 }
 
 function getSeedPassword(): string {
-  if (process.env.NODE_ENV === 'production') {
-    throw new Error('The training seed is local-only and cannot run in production.');
+  // The production stack is a training stand, so it may be seeded on purpose.
+  if (process.env.NODE_ENV === 'production' && process.env.SEED_ALLOW_PRODUCTION !== 'true') {
+    throw new Error('The training seed runs in production only with SEED_ALLOW_PRODUCTION=true.');
   }
 
   const password = process.env.SEED_USER_PASSWORD;
