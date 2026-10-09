@@ -21,6 +21,7 @@ export const upsertSettingSchema = z.object({
       value: z
         .unknown()
         .meta({ description: 'Тип залежить від ключа згідно з реєстром налаштувань.' }),
+      // Trimmed before it is measured; a blank one means "use the declared one".
       description: z.string().trim().max(255).nullable().optional(),
     })
     .refine((body) => 'value' in body, {

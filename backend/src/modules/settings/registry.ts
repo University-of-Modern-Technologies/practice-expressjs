@@ -107,9 +107,20 @@ export const parseSettingValue = <K extends SettingKey>(
 /**
  * Reads a value that is already stored. A row written before a schema was
  * tightened must not turn every read into a failure, so an unparsable stored
- * value degrades to the declared default instead of throwing.
+ * value degrades to the declared default instead of throwing — and `valid`
+ * says which of the two was served, because a default must not be reported as
+ * coming from the row.
  */
-export const readStoredValue = <K extends SettingKey>(key: K, stored: unknown): SettingValue<K> => {
+export const readStoredSetting = <K extends SettingKey>(
+  key: K,
+  stored: unknown,
+): { readonly value: SettingValue<K>; readonly valid: boolean } => {
   const result = settingDefinition(key).schema.safeParse(stored);
-  return result.success ? result.data : settingDefault(key);
+  return result.success
+    ? { value: result.data, valid: true }
+    : { value: settingDefault(key), valid: false };
 };
+
+/** Just the value of `readStoredSetting`. */
+export const readStoredValue = <K extends SettingKey>(key: K, stored: unknown): SettingValue<K> =>
+  readStoredSetting(key, stored).value;

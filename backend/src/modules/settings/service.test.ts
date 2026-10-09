@@ -5,6 +5,7 @@ import { AppError } from '../../common/errors/app-error.js';
 import type { AuditService } from '../audit/service.js';
 import { settingValueKey, settingsListKey } from './cache-keys.js';
 import { createSettingsService, type SettingsDatabase } from './service.js';
+import { upsertSettingSchema } from './validation.js';
 
 interface StoredRow {
   id: string;
@@ -98,7 +99,7 @@ interface Harness {
   readonly remove: jest.Mock;
 }
 
-const createHarness = (rows: StoredRow[]): Harness => {
+const createHarness = (rows: StoredRow[], activeWarehouses: readonly string[] = []): Harness => {
   const state = new Map(rows.map((entry) => [entry.key, entry]));
 
   // Every mock takes `unknown[]` so it matches the loose `jest.Mock` shape the
@@ -133,6 +134,12 @@ const createHarness = (rows: StoredRow[]): Harness => {
   });
 
   const organizationSetting = { findUnique, findMany, upsert, delete: remove };
+  const warehouse = {
+    findFirst: jest.fn(async (...args: unknown[]) => {
+      const { where } = args[0] as { where: { code: string; isActive: boolean } };
+      return where.isActive && activeWarehouses.includes(where.code) ? { id: 'warehouse-1' } : null;
+    }),
+  };
   const auditRecord = jest.fn(async (...args: unknown[]) => {
     void args;
     return {};
@@ -141,7 +148,7 @@ const createHarness = (rows: StoredRow[]): Harness => {
   const db = {
     organizationSetting,
     $transaction: async (callback: (transaction: unknown) => Promise<unknown>) =>
-      callback({ organizationSetting, auditLog: { create: auditRecord } }),
+      callback({ organizationSetting, auditLog: { create: auditRecord }, warehouse }),
   } as unknown as SettingsDatabase;
 
   return {
@@ -324,5 +331,52 @@ describe('settings service', () => {
       code: 'SETTING_NOT_FOUND',
       statusCode: 404,
     });
+  });
+});
+
+describe('settings service regressions', () => {
+  it('reports a stored value that no longer fits its schema as the default', async () => {
+    const harness = createHarness([row({ value: { legacy: true } })]);
+    const service = createSettingsService(harness.db, harness.audit);
+
+    const setting = await service.getByKey('organization.name');
+
+    expect(setting.value).toBe('Training CRM');
+    expect(setting.source).toBe('default');
+  });
+
+  it.each([null, '', '   '])('stores the declared description for %p', async (description) => {
+    const harness = createHarness([]);
+    const service = createSettingsService(harness.db, harness.audit);
+
+    const parsed = upsertSettingSchema.parse({
+      params: { key: 'organization.name' },
+      body: { value: 'Acme', description },
+    });
+    const saved = await service.upsert(access, 'organization.name', parsed.body);
+
+    expect(saved.description).toBe('Display name of the organization.');
+  });
+
+  it('shows the declared description for a row stored with an empty one', async () => {
+    const harness = createHarness([row({ description: '' })]);
+    const service = createSettingsService(harness.db, harness.audit);
+
+    expect((await service.getByKey('organization.name')).description).toBe(
+      'Display name of the organization.',
+    );
+  });
+
+  it('refuses a default warehouse code that names no active warehouse', async () => {
+    const harness = createHarness([], ['CENTRAL']);
+    const service = createSettingsService(harness.db, harness.audit);
+
+    await expect(
+      service.upsert(access, 'warehouse.defaultCode', { value: 'nowhere' }),
+    ).rejects.toMatchObject({ statusCode: 400, code: 'INVALID_SETTING_VALUE' });
+    expect(harness.upsert).not.toHaveBeenCalled();
+
+    const saved = await service.upsert(access, 'warehouse.defaultCode', { value: 'central' });
+    expect(saved.value).toBe('CENTRAL');
   });
 });

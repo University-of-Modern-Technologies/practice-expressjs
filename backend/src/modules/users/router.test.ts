@@ -41,31 +41,33 @@ interface TestAppOptions {
   readonly scope?: 'ALL' | 'OWN' | null;
   readonly listSessions?: UsersService['listSessions'];
   readonly revokeSession?: UsersService['revokeSession'];
+  readonly create?: UsersService['create'];
+  readonly getById?: UsersService['getById'];
+  readonly disable?: UsersService['disable'];
 }
+
+const notUsed = async (): Promise<never> => {
+  throw new Error('Not used');
+};
 
 const createTestApp = ({
   scope = 'ALL',
   listSessions = async () => [session],
   revokeSession = async () => undefined,
+  create = notUsed,
+  getById = notUsed,
+  disable = notUsed,
 }: TestAppOptions = {}) => {
   const getPermissionScope: RbacService['getPermissionScope'] = jest.fn(async () => scope);
   const rbacService: RbacService = { getPermissionScope };
   const usersService: UsersService = {
     list: async () => ({ items: [], page: 1, pageSize: 20, total: 0 }),
-    getById: async () => {
-      throw new Error('Not used');
-    },
+    getById,
     listSessions,
     revokeSession,
-    create: async () => {
-      throw new Error('Not used');
-    },
-    update: async () => {
-      throw new Error('Not used');
-    },
-    disable: async () => {
-      throw new Error('Not used');
-    },
+    create,
+    update: notUsed,
+    disable,
   };
   const router = createUsersRouter(createUsersController(usersService), authenticate, rbacService);
 
@@ -138,10 +140,15 @@ describe('users session routes', () => {
     expect(response.status).toBe(204);
     expect(response.body).toEqual({});
     expect(getPermissionScope).toHaveBeenCalledWith(authUserId, 'users', 'update');
-    expect(revokeSession).toHaveBeenCalledWith(authUserId, sessionId);
+    // The caller travels with the call: the revocation is audited under it.
+    expect(revokeSession).toHaveBeenCalledWith(
+      { actorId: authUserId, ipAddress: expect.anything() },
+      authUserId,
+      sessionId,
+    );
   });
 
-  it('validates both nested UUID path parameters before authorization', async () => {
+  it('validates both nested UUID path parameters once the permission is held', async () => {
     const revokeSession = jest.fn<UsersService['revokeSession']>(async () => undefined);
     const { app, getPermissionScope } = createTestApp({ revokeSession });
 
@@ -151,7 +158,7 @@ describe('users session routes', () => {
 
     expect(response.status).toBe(400);
     expect(response.body.error.code).toBe('VALIDATION_ERROR');
-    expect(getPermissionScope).not.toHaveBeenCalled();
+    expect(getPermissionScope).toHaveBeenCalledWith(authUserId, 'users', 'update');
     expect(revokeSession).not.toHaveBeenCalled();
   });
 
@@ -167,5 +174,71 @@ describe('users session routes', () => {
 
     expect(response.status).toBe(404);
     expect(response.body.error.code).toBe('SESSION_NOT_FOUND');
+  });
+});
+
+// The refusal order matches the sibling backend: 401, 403 for a
+// permission not held at all, 400, then 403 for a breadth too narrow.
+describe('users route refusal order', () => {
+  it('refuses a caller without the permission before validating the body', async () => {
+    const create = jest.fn<UsersService['create']>();
+    const { app } = createTestApp({ scope: null, create });
+
+    const response = await authorized(request(app).post('/api/v1/users').send({ email: 'x' }));
+
+    expect(response.status).toBe(403);
+    expect(response.body.error.code).toBe('FORBIDDEN');
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('validates the identifier before applying an OWN grant to it', async () => {
+    const getById = jest.fn<UsersService['getById']>();
+    const { app } = createTestApp({ scope: 'OWN', getById });
+
+    const response = await authorized(request(app).get('/api/v1/users/not-a-uuid'));
+
+    expect(response.status).toBe(400);
+    expect(response.body.error.code).toBe('VALIDATION_ERROR');
+    expect(getById).not.toHaveBeenCalled();
+  });
+
+  it('applies an OWN grant to the validated identifier', async () => {
+    const getById = jest.fn<UsersService['getById']>();
+    const { app } = createTestApp({ scope: 'OWN', getById });
+
+    const response = await authorized(request(app).get(`/api/v1/users/${otherUserId}`));
+
+    expect(response.status).toBe(403);
+    expect(getById).not.toHaveBeenCalled();
+  });
+
+  it('treats an OWN grant on your own id as covering it regardless of case', async () => {
+    const listSessions = jest.fn<UsersService['listSessions']>(async () => [session]);
+    const { app } = createTestApp({ scope: 'OWN', listSessions });
+
+    const response = await authorized(
+      request(app).get(`/api/v1/users/${authUserId.toUpperCase()}/sessions`),
+    );
+
+    expect(response.status).toBe(200);
+  });
+});
+
+// The refusal reaches the client in the standard envelope.
+describe('users disable route', () => {
+  it('answers 409 CANNOT_DISABLE_SELF from the service', async () => {
+    const disable = jest.fn<UsersService['disable']>(async () => {
+      throw new AppError('You cannot disable your own account', 409, 'CANNOT_DISABLE_SELF');
+    });
+    const { app } = createTestApp({ disable });
+
+    const response = await authorized(request(app).post(`/api/v1/users/${authUserId}/disable`));
+
+    expect(response.status).toBe(409);
+    expect(response.body.error.code).toBe('CANNOT_DISABLE_SELF');
+    expect(disable).toHaveBeenCalledWith(
+      expect.objectContaining({ actorId: authUserId }),
+      authUserId,
+    );
   });
 });

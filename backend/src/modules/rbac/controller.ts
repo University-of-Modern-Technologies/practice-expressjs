@@ -1,5 +1,6 @@
 import type { Request, RequestHandler } from 'express';
 import { AppError } from '../../common/errors/app-error.js';
+import { requestActor } from '../auth/client.js';
 import type { RbacAdminService } from './service.js';
 import type { CreateRoleData, ReplaceRolePermissionsData } from './types.js';
 
@@ -31,13 +32,14 @@ export const createRbacController = (rbacService: RbacAdminService): RbacControl
     response.status(200).json({ data: await rbacService.listRoles() });
   },
   createRole: async (request, response) => {
-    response
-      .status(201)
-      .json({ data: await rbacService.createRole(request.body as CreateRoleData) });
+    response.status(201).json({
+      data: await rbacService.createRole(requestActor(request), request.body as CreateRoleData),
+    });
   },
   replaceRolePermissions: async (request, response) => {
     response.status(200).json({
       data: await rbacService.replaceRolePermissions(
+        requestActor(request),
         requireParam(request, 'id'),
         request.body as ReplaceRolePermissionsData,
       ),

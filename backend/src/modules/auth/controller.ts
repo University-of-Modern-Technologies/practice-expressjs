@@ -1,5 +1,6 @@
 import type { RequestHandler } from 'express';
 import { AppError } from '../../common/errors/app-error.js';
+import { requestClient } from './client.js';
 import type { AuthService } from './service.js';
 import { createRefreshCookieOptions, type AuthConfig } from './types.js';
 import type { LoginInput } from './validation.js';
@@ -19,7 +20,7 @@ export const createAuthController = (
 
   return {
     login: async (request, response) => {
-      const result = await authService.login(request.body as LoginInput);
+      const result = await authService.login(request.body as LoginInput, requestClient(request));
       response
         .cookie(config.refreshCookieName, result.refreshToken, cookieOptions)
         .status(200)
@@ -36,7 +37,7 @@ export const createAuthController = (
       const refreshToken = request.cookies?.[config.refreshCookieName] as string | undefined;
       if (!refreshToken)
         throw new AppError('Refresh token is required', 401, 'REFRESH_TOKEN_REQUIRED');
-      const result = await authService.refresh(refreshToken);
+      const result = await authService.refresh(refreshToken, requestClient(request));
       response
         .cookie(config.refreshCookieName, result.refreshToken, cookieOptions)
         .status(200)

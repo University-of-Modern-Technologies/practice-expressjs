@@ -10,7 +10,7 @@ import {
   refusals,
 } from '../../common/openapi/index.js';
 import type { RbacService } from '../rbac/service.js';
-import { requirePermission } from '../rbac/middleware.js';
+import { permissionGate } from '../rbac/middleware.js';
 import type { UsersController } from './controller.js';
 import { userSchema, userSessionSchema } from './types.js';
 import {
@@ -40,6 +40,24 @@ export const createUsersRouter = (
     { name: 'Sessions', description: 'Refresh-сесії користувачів' },
   ]);
 
+  // Each route refuses in the order the sibling backend does: authentication,
+  // then a permission held at no breadth, then validation, then a breadth too
+  // narrow for the addressed record (see `permissionGate`).
+  const canRead = permissionGate(rbacService, { resource: 'users', action: 'read' });
+  const canReadOwn = permissionGate(rbacService, {
+    resource: 'users',
+    action: 'read',
+    ownerId: nestedUserId,
+  });
+  const canCreate = permissionGate(rbacService, { resource: 'users', action: 'create' });
+  const canUpdate = permissionGate(rbacService, { resource: 'users', action: 'update' });
+  const canUpdateOwn = permissionGate(rbacService, {
+    resource: 'users',
+    action: 'update',
+    ownerId: nestedUserId,
+  });
+  const canDisable = permissionGate(rbacService, { resource: 'users', action: 'disable' });
+
   routes.get(
     '/',
     {
@@ -47,8 +65,9 @@ export const createUsersRouter = (
       response: ok('Сторінка користувачів', pageOf(userSchema)),
       refusals: refusals(401, 403),
     },
-    requirePermission(rbacService, { resource: 'users', action: 'read' }),
+    canRead.held,
     validate(listUsersSchema),
+    canRead.breadth,
     controller.list,
   );
   routes.get(
@@ -58,12 +77,9 @@ export const createUsersRouter = (
       response: ok('Користувач', userSchema),
       refusals: refusals(401, 403, 404),
     },
-    requirePermission(rbacService, {
-      resource: 'users',
-      action: 'read',
-      ownerId: nestedUserId,
-    }),
+    canReadOwn.held,
     validate(getUserSchema),
+    canReadOwn.breadth,
     controller.getById,
   );
   routes.get(
@@ -74,12 +90,9 @@ export const createUsersRouter = (
       response: ok('Сесії користувача', z.array(userSessionSchema)),
       refusals: refusals(401, 403, 404),
     },
+    canReadOwn.held,
     validate(listUserSessionsSchema),
-    requirePermission(rbacService, {
-      resource: 'users',
-      action: 'read',
-      ownerId: nestedUserId,
-    }),
+    canReadOwn.breadth,
     controller.listSessions,
   );
   routes.delete(
@@ -90,12 +103,9 @@ export const createUsersRouter = (
       response: noContent('Сесію відкликано'),
       refusals: refusals(401, 403, 404),
     },
+    canUpdateOwn.held,
     validate(revokeUserSessionSchema),
-    requirePermission(rbacService, {
-      resource: 'users',
-      action: 'update',
-      ownerId: nestedUserId,
-    }),
+    canUpdateOwn.breadth,
     controller.revokeSession,
   );
   routes.post(
@@ -105,8 +115,9 @@ export const createUsersRouter = (
       response: created('Користувача створено', userSchema),
       refusals: refusals(401, 403, 404, 409),
     },
-    requirePermission(rbacService, { resource: 'users', action: 'create' }),
+    canCreate.held,
     validate(createUserSchema),
+    canCreate.breadth,
     controller.create,
   );
   routes.patch(
@@ -116,8 +127,9 @@ export const createUsersRouter = (
       response: ok('Користувача оновлено', userSchema),
       refusals: refusals(401, 403, 404, 409),
     },
-    requirePermission(rbacService, { resource: 'users', action: 'update' }),
+    canUpdate.held,
     validate(updateUserSchema),
+    canUpdate.breadth,
     controller.update,
   );
   routes.post(
@@ -125,10 +137,11 @@ export const createUsersRouter = (
     {
       summary: 'Деактивувати користувача',
       response: ok('Користувача деактивовано', userSchema),
-      refusals: refusals(401, 403, 404),
+      refusals: refusals(401, 403, 404, 409),
     },
-    requirePermission(rbacService, { resource: 'users', action: 'disable' }),
+    canDisable.held,
     validate(disableUserSchema),
+    canDisable.breadth,
     controller.disable,
   );
   return router;

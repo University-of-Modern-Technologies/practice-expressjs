@@ -1,7 +1,25 @@
 import { describe, expect, it, jest } from '@jest/globals';
 
 import type { CacheService } from '../../cache/cache.service.js';
-import { createRbacService, type RbacDatabase } from './service.js';
+import type { AuditEvent } from '../audit/types.js';
+import { createRbacService, type AuditRecorder, type RbacDatabase } from './service.js';
+import type { Actor } from './types.js';
+
+const actor: Actor = { actorId: 'actor-1', ipAddress: '203.0.113.7' };
+
+/** Keeps what would have been written to the trail, and through which client. */
+const createRecordingAudit = () => {
+  const events: Array<{ client: unknown; event: AuditEvent }> = [];
+  const audit: AuditRecorder = {
+    record: jest.fn(async (client: unknown, event: AuditEvent) => {
+      events.push({ client, event });
+      return {} as Awaited<ReturnType<AuditRecorder['record']>>;
+    }),
+  };
+  return { audit, events };
+};
+
+const noAudit = (): AuditRecorder => createRecordingAudit().audit;
 
 interface RecordingCache extends CacheService {
   readonly store: Map<string, unknown>;
@@ -152,10 +170,10 @@ describe('rbac service', () => {
     const createRole = jest.fn(async (_args: unknown) => roleRecord);
     const db = createTransactionDatabase({
       permission: { findMany: findPermissions },
-      role: { create: createRole },
+      role: { findUnique: jest.fn(async () => null), create: createRole },
     });
 
-    const result = await createRbacService(db).createRole({
+    const result = await createRbacService(db, undefined, undefined, noAudit()).createRole(actor, {
       name: 'support',
       description: 'Support team',
       permissions: [{ resource: 'contacts', action: 'read', scope: 'ALL' }],
@@ -178,11 +196,11 @@ describe('rbac service', () => {
     const createRole = jest.fn();
     const db = createTransactionDatabase({
       permission: { findMany: jest.fn(async () => []) },
-      role: { create: createRole },
+      role: { findUnique: jest.fn(async () => null), create: createRole },
     });
 
     await expect(
-      createRbacService(db).createRole({
+      createRbacService(db, undefined, undefined, noAudit()).createRole(actor, {
         name: 'support',
         permissions: [{ resource: 'unknown', action: 'read', scope: 'ALL' }],
       }),
@@ -194,6 +212,7 @@ describe('rbac service', () => {
     const db = createTransactionDatabase({
       permission: { findMany: jest.fn(async () => []) },
       role: {
+        findUnique: jest.fn(async () => null),
         create: jest.fn(async () => {
           throw { code: 'P2002' };
         }),
@@ -201,7 +220,10 @@ describe('rbac service', () => {
     });
 
     await expect(
-      createRbacService(db).createRole({ name: 'support', permissions: [] }),
+      createRbacService(db, undefined, undefined, noAudit()).createRole(actor, {
+        name: 'support',
+        permissions: [],
+      }),
     ).rejects.toMatchObject({ statusCode: 409, code: 'ROLE_ALREADY_EXISTS' });
   });
 
@@ -212,14 +234,18 @@ describe('rbac service', () => {
         findMany: jest.fn(async () => [{ id: 'permission-1', key: 'contacts:read' }]),
       },
       role: {
-        findUnique: jest.fn(async () => ({ id: roleRecord.id })),
+        findUnique: jest.fn(async () => roleRecord),
         update: updateRole,
       },
     });
 
-    await createRbacService(db).replaceRolePermissions(roleRecord.id, {
-      permissions: [{ resource: 'contacts', action: 'read', scope: 'ALL' }],
-    });
+    await createRbacService(db, undefined, undefined, noAudit()).replaceRolePermissions(
+      actor,
+      roleRecord.id,
+      {
+        permissions: [{ resource: 'contacts', action: 'read', scope: 'ALL' }],
+      },
+    );
 
     expect(updateRole).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -241,7 +267,11 @@ describe('rbac service', () => {
     });
 
     await expect(
-      createRbacService(db).replaceRolePermissions(roleRecord.id, { permissions: [] }),
+      createRbacService(db, undefined, undefined, noAudit()).replaceRolePermissions(
+        actor,
+        roleRecord.id,
+        { permissions: [] },
+      ),
     ).rejects.toMatchObject({ statusCode: 404, code: 'ROLE_NOT_FOUND' });
   });
 });
@@ -318,15 +348,19 @@ describe('rbac permission caching', () => {
         findMany: jest.fn(async () => [{ id: 'permission-1', key: 'contacts:read' }]),
       },
       role: {
-        findUnique: jest.fn(async () => ({ id: roleRecord.id })),
+        findUnique: jest.fn(async () => roleRecord),
         update: jest.fn(async () => roleRecord),
       },
     });
     cache.store.set('rbac:user-permissions:user-1', { isActive: true, scopes: {} });
 
-    await createRbacService(db, cache, 120).replaceRolePermissions(roleRecord.id, {
-      permissions: [{ resource: 'contacts', action: 'read', scope: 'ALL' }],
-    });
+    await createRbacService(db, cache, 120, noAudit()).replaceRolePermissions(
+      actor,
+      roleRecord.id,
+      {
+        permissions: [{ resource: 'contacts', action: 'read', scope: 'ALL' }],
+      },
+    );
 
     expect(cache.invalidatedPrefixes).toEqual(['rbac:user-permissions:']);
     expect(cache.store.size).toBe(0);
@@ -340,7 +374,9 @@ describe('rbac permission caching', () => {
     });
 
     await expect(
-      createRbacService(db, cache, 120).replaceRolePermissions(roleRecord.id, { permissions: [] }),
+      createRbacService(db, cache, 120, noAudit()).replaceRolePermissions(actor, roleRecord.id, {
+        permissions: [],
+      }),
     ).rejects.toMatchObject({ code: 'ROLE_NOT_FOUND' });
     expect(cache.invalidatedPrefixes).toEqual([]);
   });
@@ -350,5 +386,126 @@ describe('rbac permission caching', () => {
     await createRbacService(databaseWithScopes(['ALL']), cache, 120).invalidateAllUserPermissions();
 
     expect(cache.invalidatedPrefixes).toEqual(['rbac:user-permissions:']);
+  });
+});
+
+// The order of refusals matches the sibling.
+describe('rbac role creation order', () => {
+  it('reports a taken name before looking at the permission list', async () => {
+    const findPermissions = jest.fn(async () => []);
+    const db = createTransactionDatabase({
+      permission: { findMany: findPermissions },
+      role: { findUnique: jest.fn(async () => ({ id: roleRecord.id })), create: jest.fn() },
+    });
+
+    await expect(
+      createRbacService(db, undefined, undefined, noAudit()).createRole(actor, {
+        name: 'support',
+        permissions: [{ resource: 'unknown', action: 'read', scope: 'ALL' }],
+      }),
+    ).rejects.toMatchObject({ statusCode: 409, code: 'ROLE_ALREADY_EXISTS' });
+    expect(findPermissions).not.toHaveBeenCalled();
+  });
+});
+
+// Role administration lands in the trail, inside the same transaction.
+describe('rbac role audit', () => {
+  it('records a created role', async () => {
+    const transaction = {
+      permission: {
+        findMany: jest.fn(async () => [{ id: 'permission-1', key: 'contacts:read' }]),
+      },
+      role: { findUnique: jest.fn(async () => null), create: jest.fn(async () => roleRecord) },
+    };
+    const { audit, events } = createRecordingAudit();
+
+    await createRbacService(
+      createTransactionDatabase(transaction),
+      undefined,
+      undefined,
+      audit,
+    ).createRole(actor, {
+      name: 'support',
+      permissions: [{ resource: 'contacts', action: 'read', scope: 'ALL' }],
+    });
+
+    expect(events).toEqual([
+      {
+        client: transaction,
+        event: expect.objectContaining({
+          actorId: 'actor-1',
+          ipAddress: '203.0.113.7',
+          action: 'role.created',
+          entityType: 'role',
+          entityId: roleRecord.id,
+          changes: {
+            after: expect.objectContaining({
+              permissions: [{ resource: 'contacts', action: 'read', scope: 'ALL' }],
+            }),
+          },
+        }),
+      },
+    ]);
+  });
+
+  it('records the permissions of a role before and after a replacement', async () => {
+    const replaced = {
+      ...roleRecord,
+      permissions: [{ scope: 'OWN' as const, permission: { key: 'contacts:read' } }],
+    };
+    const transaction = {
+      permission: {
+        findMany: jest.fn(async () => [{ id: 'permission-1', key: 'contacts:read' }]),
+      },
+      role: {
+        findUnique: jest.fn(async () => roleRecord),
+        update: jest.fn(async () => replaced),
+      },
+    };
+    const { audit, events } = createRecordingAudit();
+
+    await createRbacService(
+      createTransactionDatabase(transaction),
+      undefined,
+      undefined,
+      audit,
+    ).replaceRolePermissions(actor, roleRecord.id, {
+      permissions: [{ resource: 'contacts', action: 'read', scope: 'OWN' }],
+    });
+
+    expect(events).toEqual([
+      {
+        client: transaction,
+        event: expect.objectContaining({
+          action: 'role.permissions_replaced',
+          entityId: roleRecord.id,
+          changes: {
+            before: expect.objectContaining({
+              permissions: [{ resource: 'contacts', action: 'read', scope: 'ALL' }],
+            }),
+            after: expect.objectContaining({
+              permissions: [{ resource: 'contacts', action: 'read', scope: 'OWN' }],
+            }),
+          },
+        }),
+      },
+    ]);
+  });
+
+  it('writes nothing to the trail when the role is missing', async () => {
+    const { audit, events } = createRecordingAudit();
+    const db = createTransactionDatabase({
+      permission: { findMany: jest.fn() },
+      role: { findUnique: jest.fn(async () => null), update: jest.fn() },
+    });
+
+    await expect(
+      createRbacService(db, undefined, undefined, audit).replaceRolePermissions(
+        actor,
+        roleRecord.id,
+        { permissions: [] },
+      ),
+    ).rejects.toMatchObject({ code: 'ROLE_NOT_FOUND' });
+    expect(events).toEqual([]);
   });
 });
