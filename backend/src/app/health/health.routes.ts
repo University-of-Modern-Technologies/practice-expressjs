@@ -137,7 +137,7 @@ export const createHealthRouter = (
     response.status(200).json({
       name: info.name,
       version: info.version,
-      nodeEnv: process.env.NODE_ENV ?? 'development',
+      nodeEnv: process.env.APP_ENV ?? 'development',
       phase: lifecycle.phase,
       uptimeSeconds: Math.round(process.uptime()),
     });

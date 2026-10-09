@@ -218,7 +218,7 @@ const createAuthConfig = (config: AppConfig): AuthConfig => ({
   refreshTokenTtlSeconds: 7 * 24 * 60 * 60,
   refreshCookieName: REFRESH_COOKIE_NAME,
   refreshCookiePath: '/api/v1/auth',
-  secureCookies: config.nodeEnv === 'production',
+  secureCookies: config.appEnv === 'production',
 });
 
 interface ModuleDependencies {
@@ -434,7 +434,7 @@ export const createCompositionRoot = (config: AppConfig): CompositionRoot => {
   // left out of test runs entirely rather than reaching for infrastructure that
   // unit tests deliberately do not provide.
   const throttling =
-    config.nodeEnv === 'test'
+    config.appEnv === 'test'
       ? {}
       : {
           rateLimiter: createRateLimiter(redis, config, logger),

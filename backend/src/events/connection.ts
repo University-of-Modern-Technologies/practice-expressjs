@@ -59,7 +59,7 @@ export const connectEventStore = async (config: AppConfig, logger: Logger): Prom
       maxPoolSize: MAX_POOL_SIZE,
       // Fail fast instead of queueing writes while the store is unreachable.
       bufferCommands: false,
-      autoIndex: config.nodeEnv !== 'production',
+      autoIndex: config.appEnv !== 'production',
     })
     .then(() => undefined);
 
@@ -83,7 +83,7 @@ export const getEventStoreConnectionState = (): EventStoreConnectionState =>
 
 export const isEventStoreConnected = (): boolean => getEventStoreConnectionState() === 'connected';
 
-/** Readiness probe for `/health/ready`. */
+/** Readiness probe for `/api/health/ready`. */
 export const createEventStoreReadinessCheck = (): ReadinessCheck => ({
   name: 'event-store',
   check: async (): Promise<void> => {

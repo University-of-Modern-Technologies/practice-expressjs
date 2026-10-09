@@ -1,8 +1,8 @@
 const SAFE_TEST_DATABASE_NAMES = /(^|[-_])(test|testing)([-_]|$)/i;
 
 export function assertSafeTestDatabaseUrl(databaseUrl = process.env.DATABASE_URL): string {
-  if (process.env.NODE_ENV !== 'test') {
-    throw new Error('Database test helpers require NODE_ENV=test.');
+  if (process.env.APP_ENV !== 'test') {
+    throw new Error('Database test helpers require APP_ENV=test.');
   }
 
   if (!databaseUrl) {

@@ -3,7 +3,7 @@ import pino, { type Logger } from 'pino';
 import type { AppConfig } from './env.js';
 
 // The pretty transport is a dev-only dependency and is absent from production
-// container images even when NODE_ENV=development is injected via env files.
+// container images even when APP_ENV=development is injected via env files.
 const supportsPrettyTransport = (): boolean => {
   try {
     require.resolve('pino-pretty');
@@ -18,7 +18,7 @@ export const createLogger = (config: AppConfig): Logger => {
     level: config.logLevel,
     base: {
       service: 'nodejs-backend',
-      environment: config.nodeEnv,
+      environment: config.appEnv,
     },
     redact: {
       paths: [
@@ -33,7 +33,7 @@ export const createLogger = (config: AppConfig): Logger => {
     },
   };
 
-  return config.nodeEnv === 'development' && supportsPrettyTransport()
+  return config.appEnv === 'development' && supportsPrettyTransport()
     ? pino({
         ...baseOptions,
         transport: {

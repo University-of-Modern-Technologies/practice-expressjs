@@ -4,14 +4,14 @@ import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { config } from 'dotenv';
+import { loadEnv } from '../src/config/load-env.cjs';
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const prismaCli = path.join(projectRoot, 'node_modules', 'prisma', 'build', 'index.js');
 
-// The CLI only reads .env for variables the process does not already have, so
-// it is loaded here first: otherwise the placeholder below would win over it.
-config({ path: path.join(projectRoot, '.env'), quiet: true });
+// Loaded the same way the application loads it, so the CLI reaches the same
+// database. It has to happen first: otherwise the placeholder below would win.
+loadEnv();
 
 const environment = {
   ...process.env,

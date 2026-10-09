@@ -1,13 +1,21 @@
-import 'dotenv/config';
-
 import { z } from 'zod';
 
+import { loadEnv } from './load-env.cjs';
+
+// Runs on import, before anything reads `process.env`: Prisma takes
+// `DATABASE_URL` straight from it, and the storage URLs are assembled here.
+loadEnv();
+
+const DEFAULT_PORT = 8000;
+
 const envSchema = z.object({
-  NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
+  APP_ENV: z.enum(['development', 'test', 'production']).default('development'),
   HOST: z.string().min(1).default('0.0.0.0'),
-  PORT: z.coerce.number().int().min(1).max(65_535).default(3000),
+  // `PORT` wins; without it the shared `API_PORT` is used.
+  PORT: z.coerce.number().int().min(1).max(65_535).optional(),
+  API_PORT: z.coerce.number().int().min(1).max(65_535).optional(),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
-  CORS_ORIGINS: z.string().default('http://localhost:3100'),
+  CORS_ORIGINS: z.string().default('http://localhost:3000'),
   JSON_BODY_LIMIT: z.string().min(1).default('1mb'),
   DATABASE_URL: z.url(),
   JWT_ACCESS_SECRET: z.string().min(32),
@@ -72,7 +80,7 @@ const envSchema = z.object({
 });
 
 export type AppConfig = Readonly<{
-  nodeEnv: z.infer<typeof envSchema>['NODE_ENV'];
+  appEnv: z.infer<typeof envSchema>['APP_ENV'];
   host: string;
   port: number;
   logLevel: z.infer<typeof envSchema>['LOG_LEVEL'];
@@ -129,9 +137,9 @@ export const loadConfig = (source: NodeJS.ProcessEnv = process.env): AppConfig =
   }
 
   return {
-    nodeEnv: parsed.data.NODE_ENV,
+    appEnv: parsed.data.APP_ENV,
     host: parsed.data.HOST,
-    port: parsed.data.PORT,
+    port: parsed.data.PORT ?? parsed.data.API_PORT ?? DEFAULT_PORT,
     logLevel: parsed.data.LOG_LEVEL,
     corsOrigins: parsed.data.CORS_ORIGINS.split(',')
       .map((origin) => origin.trim())

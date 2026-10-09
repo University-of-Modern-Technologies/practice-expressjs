@@ -1,9 +1,12 @@
+// First on purpose: importing the configuration loads the .env files, and the
+// modules below may read `process.env` while they are being imported.
+import { loadConfig } from './config/index.js';
+
 import { createServer, type Server } from 'node:http';
 import type { Socket } from 'node:net';
 
 import { serviceLifecycle } from './app/index.js';
 import { createCompositionRoot } from './composition-root.js';
-import { loadConfig } from './config/index.js';
 
 /** Exit codes, kept explicit so orchestrators can distinguish failure modes. */
 const EXIT_CODE = {
@@ -181,7 +184,7 @@ compositionRoot
     server.listen(config.port, config.host, () => {
       serviceLifecycle.markStarted();
       logger.info(
-        { host: config.host, port: config.port, nodeEnv: config.nodeEnv, wsPath: config.wsPath },
+        { host: config.host, port: config.port, appEnv: config.appEnv, wsPath: config.wsPath },
         'HTTP server listening',
       );
     });

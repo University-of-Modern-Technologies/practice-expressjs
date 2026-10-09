@@ -21,7 +21,7 @@ const suites = fs
 
 const commandExample = [
   "$env:RUN_DB_TESTS = 'true'",
-  "$env:DATABASE_URL_TEST = 'postgresql://postgres:postgres@localhost:5432/practice_crm_test?schema=public'",
+  "$env:DATABASE_URL_TEST = 'postgresql://postgres:postgres@127.0.0.1:5432/practice_crm_test?schema=public'",
   'node .\\scripts\\test\\run-integration.mjs',
 ].join('\n');
 
@@ -56,9 +56,9 @@ if (schema && schema !== 'public') {
   );
 }
 
-const redisUrl = process.env.REDIS_URL ?? 'redis://localhost:6379';
+const redisUrl = process.env.REDIS_URL ?? 'redis://127.0.0.1:6379';
 const mongodbUrl =
-  process.env.MONGODB_URL ?? 'mongodb://localhost:27017/practice_events_test?authSource=admin';
+  process.env.MONGODB_URL ?? 'mongodb://127.0.0.1:27017/practice_events_test?authSource=admin';
 
 const mongoDatabaseName = decodeURIComponent(new URL(mongodbUrl).pathname.replace(/^\//, ''));
 if (mongoDatabaseName && !safeDatabaseName.test(mongoDatabaseName)) {
@@ -69,7 +69,7 @@ if (mongoDatabaseName && !safeDatabaseName.test(mongoDatabaseName)) {
 
 const childEnv = {
   ...process.env,
-  NODE_ENV: 'test',
+  APP_ENV: 'test',
   DATABASE_URL: databaseUrl,
   REDIS_URL: redisUrl,
   MONGODB_URL: mongodbUrl,

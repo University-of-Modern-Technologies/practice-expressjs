@@ -14,7 +14,7 @@ const createTestApp = (
   checkTimeoutMs = 50,
 ): express.Express => {
   lifecycle.markStarted();
-  return express().use('/health', createHealthRouter(checks, { lifecycle, checkTimeoutMs }));
+  return express().use('/api/health', createHealthRouter(checks, { lifecycle, checkTimeoutMs }));
 };
 
 describe('health routes', () => {
@@ -27,7 +27,7 @@ describe('health routes', () => {
   it('reports the process as live without touching dependencies', async () => {
     const app = createTestApp([{ name: 'database', check: never }], lifecycle);
 
-    const response = await request(app).get('/health/live');
+    const response = await request(app).get('/api/health/live');
 
     expect(response.status).toBe(200);
     expect(response.body).toEqual({ status: 'ok' });
@@ -37,7 +37,7 @@ describe('health routes', () => {
     const app = createTestApp([], lifecycle);
     lifecycle.beginDraining();
 
-    const response = await request(app).get('/health/live');
+    const response = await request(app).get('/api/health/live');
 
     expect(response.status).toBe(200);
   });
@@ -51,7 +51,7 @@ describe('health routes', () => {
       lifecycle,
     );
 
-    const response = await request(app).get('/health/ready');
+    const response = await request(app).get('/api/health/ready');
 
     expect(response.status).toBe(200);
     expect(response.body.status).toBe('ready');
@@ -73,7 +73,7 @@ describe('health routes', () => {
       lifecycle,
     );
 
-    const response = await request(app).get('/health/ready');
+    const response = await request(app).get('/api/health/ready');
 
     expect(response.status).toBe(503);
     expect(response.body.status).toBe('not_ready');
@@ -93,7 +93,7 @@ describe('health routes', () => {
       30,
     );
 
-    const response = await request(app).get('/health/ready');
+    const response = await request(app).get('/api/health/ready');
 
     expect(response.status).toBe(503);
     expect(response.body.checks).toEqual([
@@ -118,7 +118,7 @@ describe('health routes', () => {
     );
 
     const startedAt = Date.now();
-    const response = await request(app).get('/health/ready');
+    const response = await request(app).get('/api/health/ready');
 
     expect(response.status).toBe(200);
     expect(Date.now() - startedAt).toBeLessThan(180);
@@ -133,7 +133,7 @@ describe('health routes', () => {
       lifecycle,
     );
 
-    const response = await request(app).get('/health/ready');
+    const response = await request(app).get('/api/health/ready');
 
     expect(response.status).toBe(200);
     expect(response.body.status).toBe('degraded');
@@ -142,16 +142,16 @@ describe('health routes', () => {
   it('honours a per-check timeout override', async () => {
     const app = createTestApp([{ name: 'stuck', check: never, timeoutMs: 20 }], lifecycle, 10_000);
 
-    const response = await request(app).get('/health/ready');
+    const response = await request(app).get('/api/health/ready');
 
     expect(response.status).toBe(503);
     expect(response.body.checks[0].status).toBe('timed_out');
   });
 
   it('reports not ready before startup completes', async () => {
-    const app = express().use('/health', createHealthRouter([], { lifecycle }));
+    const app = express().use('/api/health', createHealthRouter([], { lifecycle }));
 
-    const response = await request(app).get('/health/ready');
+    const response = await request(app).get('/api/health/ready');
 
     expect(response.status).toBe(503);
     expect(response.body).toEqual({ status: 'not_ready', phase: 'starting', checks: [] });
@@ -173,7 +173,7 @@ describe('health routes', () => {
     );
     lifecycle.beginDraining();
 
-    const response = await request(app).get('/health/ready');
+    const response = await request(app).get('/api/health/ready');
 
     expect(response.status).toBe(503);
     expect(response.body.status).toBe('draining');
@@ -181,15 +181,15 @@ describe('health routes', () => {
   });
 
   it('exposes the startup probe', async () => {
-    const app = express().use('/health', createHealthRouter([], { lifecycle }));
+    const app = express().use('/api/health', createHealthRouter([], { lifecycle }));
 
-    const starting = await request(app).get('/health/startup');
+    const starting = await request(app).get('/api/health/startup');
     expect(starting.status).toBe(503);
     expect(starting.body.status).toBe('starting');
 
     lifecycle.markStarted();
 
-    const started = await request(app).get('/health/startup');
+    const started = await request(app).get('/api/health/startup');
     expect(started.status).toBe(200);
     expect(started.body.status).toBe('started');
   });
@@ -197,7 +197,7 @@ describe('health routes', () => {
   it('exposes non-sensitive service information', async () => {
     const app = createTestApp([], lifecycle);
 
-    const response = await request(app).get('/health/info');
+    const response = await request(app).get('/api/health/info');
 
     expect(response.status).toBe(200);
     expect(response.body).toEqual({

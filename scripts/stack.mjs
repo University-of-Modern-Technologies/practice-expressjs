@@ -7,7 +7,7 @@
 
 import { spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { copyFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { connect, createServer } from 'node:net';
 import path from 'node:path';
 import { createInterface } from 'node:readline/promises';
@@ -27,8 +27,8 @@ const portainerPasswordFile = '.portainer-password';
 const storageServices = ['postgres', 'redis', 'mongo'];
 const ports = [
   ['HTTP_PORT', 8080, 'application (nginx)'],
-  ['API_PORT', 3000, 'API'],
-  ['WEB_PORT', 3100, 'web client'],
+  ['API_PORT', 8000, 'API'],
+  ['WEB_PORT', 3000, 'web client'],
   ['POSTGRES_PORT', 5432, 'PostgreSQL'],
   ['REDIS_PORT', 6379, 'Redis'],
   ['MONGO_PORT', 27017, 'MongoDB'],
@@ -56,9 +56,10 @@ function readEnv(file = '.env') {
   return values;
 }
 
-function run(command, args, { cwd = root } = {}) {
+function run(command, args, { cwd = root, env = process.env } = {}) {
   const result = spawnSync(command, args, {
     cwd,
+    env,
     stdio: 'inherit',
     shell: process.platform === 'win32',
   });
@@ -131,21 +132,25 @@ function ensurePortainerPassword() {
 }
 
 function ensureEnv() {
-  if (!existsSync(path.join(root, '.env'))) {
-    fail('.env is missing. Run `npm run setup` first.');
+  for (const [, target] of envFiles) {
+    if (!existsSync(path.join(root, target))) {
+      fail(`${target} is missing. Run \`npm run setup\` first.`);
+    }
   }
 }
 
+const apiPort = () => Number(readEnv().API_PORT || 8000);
+
 function printAddresses() {
-  const env = readEnv();
-  const http = env.HTTP_PORT || 8080;
+  const http = readEnv().HTTP_PORT || 8080;
+  const password = readEnv('backend/.env').SEED_USER_PASSWORD;
   console.log('');
   console.log(green(`Ready: http://localhost:${http}`));
-  console.log(`  API docs:  http://localhost:${http}/docs`);
-  console.log(`  Health:    http://localhost:${http}/health/ready`);
+  console.log(`  API docs:  http://localhost:${http}/api/docs`);
+  console.log(`  Health:    http://localhost:${http}/api/health/ready`);
   console.log('');
   console.log('  Sign in as admin@crm-training.example');
-  console.log(`  Password:  ${env.SEED_USER_PASSWORD ?? 'the SEED_USER_PASSWORD value from .env'}`);
+  console.log(`  Password:  ${password ?? 'the SEED_USER_PASSWORD value from backend/.env'}`);
 }
 
 async function confirm(question) {
@@ -160,7 +165,7 @@ const extra = process.argv.slice(3).filter((argument) => argument !== '--yes' &&
 
 const commands = {
   async setup() {
-    const existing = readEnv();
+    const existing = readEnv('backend/.env');
     const secrets = Object.fromEntries(
       generatedSecrets.map((key) => [key, existing[key] || randomBytes(32).toString('base64url')]),
     );
@@ -172,12 +177,6 @@ const commands = {
         writeEnvFile(source, target, secrets);
         console.log(green(`Created ${target}`));
       }
-    }
-    if (!existsSync(path.join(root, 'frontend/.env.local'))) {
-      copyFileSync(
-        path.join(root, 'frontend/.env.example'),
-        path.join(root, 'frontend/.env.local'),
-      );
     }
     ensurePortainerPassword();
 
@@ -237,7 +236,27 @@ const commands = {
     ensureEnv();
     requireDocker();
     compose('dev', ['up', '-d', '--build', '--wait', 'api']);
-    console.log(green(`\nAPI: http://localhost:${readEnv().API_PORT || 3000}/docs`));
+    console.log(green(`\nAPI: http://localhost:${apiPort()}/api/docs`));
+  },
+
+  // One API port for every way of running it, so the web client always finds it.
+  // Two processes on one port do not fail on Windows, they split the traffic.
+  async dev() {
+    ensureEnv();
+    const port = apiPort();
+    if (!(await portIsFree(port))) {
+      fail(
+        `port ${port} is already taken, most likely by the api container of this stack.\n` +
+          'Stop the stack (npm stop) and start the storage only (npm run start:infra).',
+      );
+    }
+    run('npm', ['run', 'dev'], { cwd: path.join(root, 'backend') });
+  },
+
+  'dev:web'() {
+    const env = { ...process.env, API_ORIGIN: `http://127.0.0.1:${apiPort()}` };
+    const webPort = String(readEnv().WEB_PORT || 3000);
+    run('npx', ['next', 'dev', '--port', webPort], { cwd: path.join(root, 'frontend'), env });
   },
 
   'start:infra'() {
