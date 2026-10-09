@@ -1,5 +1,5 @@
 import type { Request, RequestHandler } from 'express';
-import { AppError } from '../../common/errors/index.js';
+import { AppError, validationError } from '../../common/errors/index.js';
 import type { AuthContext } from '../../common/types/auth-context.js';
 import type { RbacService } from '../rbac/service.js';
 import type { PermissionScope } from '../rbac/types.js';
@@ -52,16 +52,13 @@ const accessFor = (request: Request, actorId: string, scope: PermissionScope): O
   ...(request.ip ? { ipAddress: request.ip } : {}),
 });
 
-const invalid = (details: unknown): AppError =>
-  new AppError('Invalid request', 400, 'VALIDATION_ERROR', details);
-
 export const createOrdersController = (
   service: OrdersService,
   rbac: RbacService,
 ): OrdersController => ({
   list: async (request, response) => {
     const parsed = listOrdersSchema.safeParse({ query: request.query });
-    if (!parsed.success) throw invalid(parsed.error.flatten());
+    if (!parsed.success) throw validationError(parsed.error.flatten());
     const auth = getAuth(request);
     const scope = await getScope(rbac, auth.userId, 'read');
     response.json({
@@ -71,7 +68,7 @@ export const createOrdersController = (
 
   getById: async (request, response) => {
     const parsed = getOrderSchema.safeParse({ params: request.params });
-    if (!parsed.success) throw invalid(parsed.error.flatten());
+    if (!parsed.success) throw validationError(parsed.error.flatten());
     const auth = getAuth(request);
     const scope = await getScope(rbac, auth.userId, 'read');
     response.json({
@@ -81,7 +78,7 @@ export const createOrdersController = (
 
   create: async (request, response) => {
     const parsed = createOrderSchema.safeParse({ body: request.body });
-    if (!parsed.success) throw invalid(parsed.error.flatten());
+    if (!parsed.success) throw validationError(parsed.error.flatten());
     const auth = getAuth(request);
     const scope = await getScope(rbac, auth.userId, 'write');
     response.status(201).json({
@@ -91,7 +88,7 @@ export const createOrdersController = (
 
   duplicate: async (request, response) => {
     const parsed = duplicateOrderSchema.safeParse({ params: request.params });
-    if (!parsed.success) throw invalid(parsed.error.flatten());
+    if (!parsed.success) throw validationError(parsed.error.flatten());
     const auth = getAuth(request);
     const scope = await getScope(rbac, auth.userId, 'write');
     response.status(201).json({
@@ -101,7 +98,7 @@ export const createOrdersController = (
 
   update: async (request, response) => {
     const parsed = updateOrderSchema.safeParse({ params: request.params, body: request.body });
-    if (!parsed.success) throw invalid(parsed.error.flatten());
+    if (!parsed.success) throw validationError(parsed.error.flatten());
     const auth = getAuth(request);
     const scope = await getScope(rbac, auth.userId, 'write');
     response.json({
@@ -115,7 +112,7 @@ export const createOrdersController = (
 
   addItem: async (request, response) => {
     const parsed = addOrderItemSchema.safeParse({ params: request.params, body: request.body });
-    if (!parsed.success) throw invalid(parsed.error.flatten());
+    if (!parsed.success) throw validationError(parsed.error.flatten());
     const auth = getAuth(request);
     const scope = await getScope(rbac, auth.userId, 'write');
     response.status(201).json({
@@ -129,7 +126,7 @@ export const createOrdersController = (
 
   updateItem: async (request, response) => {
     const parsed = updateOrderItemSchema.safeParse({ params: request.params, body: request.body });
-    if (!parsed.success) throw invalid(parsed.error.flatten());
+    if (!parsed.success) throw validationError(parsed.error.flatten());
     const auth = getAuth(request);
     const scope = await getScope(rbac, auth.userId, 'write');
     response.json({
@@ -147,7 +144,7 @@ export const createOrdersController = (
       params: request.params,
       query: request.query,
     });
-    if (!parsed.success) throw invalid(parsed.error.flatten());
+    if (!parsed.success) throw validationError(parsed.error.flatten());
     const auth = getAuth(request);
     const scope = await getScope(rbac, auth.userId, 'write');
     response.json({
@@ -162,7 +159,7 @@ export const createOrdersController = (
 
   transition: async (request, response) => {
     const parsed = transitionOrderSchema.safeParse({ params: request.params, body: request.body });
-    if (!parsed.success) throw invalid(parsed.error.flatten());
+    if (!parsed.success) throw validationError(parsed.error.flatten());
     const auth = getAuth(request);
     const scope = await getScope(rbac, auth.userId, 'write');
     response.json({
@@ -176,7 +173,7 @@ export const createOrdersController = (
 
   delete: async (request, response) => {
     const parsed = deleteOrderSchema.safeParse({ params: request.params, query: request.query });
-    if (!parsed.success) throw invalid(parsed.error.flatten());
+    if (!parsed.success) throw validationError(parsed.error.flatten());
     const auth = getAuth(request);
     const scope = await getScope(rbac, auth.userId, 'delete');
     await service.delete(

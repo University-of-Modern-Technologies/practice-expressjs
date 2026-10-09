@@ -24,6 +24,16 @@ describe('create deal validation', () => {
   it.each(['QUALIFIED', 'PROPOSAL', 'WON', 'LOST'])('rejects the %s stage at creation', (stage) => {
     expect(createDealSchema.safeParse({ body: { ...validDeal, stage } }).success).toBe(false);
   });
+
+  it('accepts the amount only as a decimal string, never as a JSON number', () => {
+    // Money crosses the API as a string; a number would already have lost precision.
+    expect(createDealSchema.safeParse({ body: { ...validDeal, amount: 1000 } }).success).toBe(
+      false,
+    );
+    expect(
+      updateDealSchema.safeParse({ params: { id }, body: { version: 1, amount: 1000.5 } }).success,
+    ).toBe(false);
+  });
 });
 
 describe('deal mutation validation', () => {

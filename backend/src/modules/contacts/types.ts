@@ -1,17 +1,23 @@
+import { z } from 'zod';
+
 import type { PermissionScope } from '../rbac/types.js';
 
-export interface ContactDto {
-  readonly id: string;
-  readonly ownerId: string;
-  readonly firstName: string;
-  readonly lastName: string;
-  readonly email: string | null;
-  readonly phone: string | null;
-  readonly company: string | null;
-  readonly notes: string | null;
-  readonly createdAt: Date;
-  readonly updatedAt: Date;
-}
+export const contactSchema = z
+  .object({
+    id: z.uuid(),
+    ownerId: z.uuid(),
+    firstName: z.string(),
+    lastName: z.string(),
+    email: z.email().nullable(),
+    phone: z.string().nullable(),
+    company: z.string().nullable(),
+    notes: z.string().nullable(),
+    createdAt: z.date(),
+    updatedAt: z.date(),
+  })
+  .meta({ id: 'Contact' });
+
+export type ContactDto = Readonly<z.infer<typeof contactSchema>>;
 
 export interface ContactAccess {
   readonly actorId: string;

@@ -1,18 +1,29 @@
+import { z } from 'zod';
+
+import {
+  currencyCodeSchema,
+  decimalStringSchema,
+  versionNumberSchema,
+} from '../../common/openapi/index.js';
 import type { PermissionScope } from '../rbac/types.js';
 
-export interface ProductDto {
-  readonly id: string;
-  readonly sku: string;
-  readonly name: string;
-  readonly description: string | null;
-  readonly category: string | null;
-  readonly unitPrice: string;
-  readonly currency: string;
-  readonly isActive: boolean;
-  readonly version: number;
-  readonly createdAt: Date;
-  readonly updatedAt: Date;
-}
+export const productSchema = z
+  .object({
+    id: z.uuid(),
+    sku: z.string().max(64).meta({ description: 'Незмінний після створення.' }),
+    name: z.string(),
+    description: z.string().nullable(),
+    category: z.string().nullable(),
+    unitPrice: decimalStringSchema,
+    currency: currencyCodeSchema,
+    isActive: z.boolean(),
+    version: versionNumberSchema,
+    createdAt: z.date(),
+    updatedAt: z.date(),
+  })
+  .meta({ id: 'Product' });
+
+export type ProductDto = Readonly<z.infer<typeof productSchema>>;
 
 /**
  * The catalogue has no owner column, so `scope` only decides whether the actor

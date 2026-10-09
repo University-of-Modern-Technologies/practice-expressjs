@@ -1,5 +1,5 @@
 import type { Request, RequestHandler } from 'express';
-import { AppError } from '../../common/errors/index.js';
+import { AppError, validationError } from '../../common/errors/index.js';
 import type { AuthContext } from '../../common/types/auth-context.js';
 import type { RbacService } from '../rbac/service.js';
 import type { PermissionScope } from '../rbac/types.js';
@@ -45,16 +45,13 @@ const accessFor = (
   ...(request.ip ? { ipAddress: request.ip } : {}),
 });
 
-const invalid = (details: unknown): AppError =>
-  new AppError('Invalid request', 400, 'VALIDATION_ERROR', details);
-
 export const createContactsController = (
   service: ContactsService,
   rbac: RbacService,
 ): ContactsController => ({
   list: async (request, response) => {
     const parsed = listContactsSchema.safeParse({ query: request.query });
-    if (!parsed.success) throw invalid(parsed.error.flatten());
+    if (!parsed.success) throw validationError(parsed.error.flatten());
     const auth = getAuth(request);
     const scope = await getScope(rbac, auth.userId, 'read');
     response.json({
@@ -64,7 +61,7 @@ export const createContactsController = (
 
   getById: async (request, response) => {
     const parsed = getContactSchema.safeParse({ params: request.params });
-    if (!parsed.success) throw invalid(parsed.error.flatten());
+    if (!parsed.success) throw validationError(parsed.error.flatten());
     const auth = getAuth(request);
     const scope = await getScope(rbac, auth.userId, 'read');
     response.json({
@@ -74,7 +71,7 @@ export const createContactsController = (
 
   create: async (request, response) => {
     const parsed = createContactSchema.safeParse({ body: request.body });
-    if (!parsed.success) throw invalid(parsed.error.flatten());
+    if (!parsed.success) throw validationError(parsed.error.flatten());
     const auth = getAuth(request);
     const scope = await getScope(rbac, auth.userId, 'write');
     response.status(201).json({
@@ -84,7 +81,7 @@ export const createContactsController = (
 
   update: async (request, response) => {
     const parsed = updateContactSchema.safeParse({ params: request.params, body: request.body });
-    if (!parsed.success) throw invalid(parsed.error.flatten());
+    if (!parsed.success) throw validationError(parsed.error.flatten());
     const auth = getAuth(request);
     const scope = await getScope(rbac, auth.userId, 'write');
     response.json({
@@ -98,7 +95,7 @@ export const createContactsController = (
 
   delete: async (request, response) => {
     const parsed = deleteContactSchema.safeParse({ params: request.params });
-    if (!parsed.success) throw invalid(parsed.error.flatten());
+    if (!parsed.success) throw validationError(parsed.error.flatten());
     const auth = getAuth(request);
     const scope = await getScope(rbac, auth.userId, 'delete');
     await service.delete(accessFor(request, auth.userId, scope), parsed.data.params.id);

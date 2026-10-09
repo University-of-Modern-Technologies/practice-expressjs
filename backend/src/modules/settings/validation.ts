@@ -8,7 +8,8 @@ const settingKeyParams = z.object({
     .trim()
     .min(1)
     .max(100)
-    .regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/, 'Invalid setting key'),
+    .regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/, 'Invalid setting key')
+    .meta({ description: 'Ключ із закритого реєстру налаштувань.' }),
 });
 
 export const getSettingSchema = z.object({ params: settingKeyParams });
@@ -17,7 +18,9 @@ export const upsertSettingSchema = z.object({
   params: settingKeyParams,
   body: z
     .object({
-      value: z.unknown(),
+      value: z
+        .unknown()
+        .meta({ description: 'Тип залежить від ключа згідно з реєстром налаштувань.' }),
       description: z.string().trim().max(255).nullable().optional(),
     })
     .refine((body) => 'value' in body, {

@@ -1,3 +1,5 @@
+import { z } from 'zod';
+
 export type AuditJsonPrimitive = string | number | boolean | null;
 export type AuditJsonValue =
   AuditJsonPrimitive | AuditJsonValue[] | { readonly [key: string]: AuditJsonValue };
@@ -23,6 +25,25 @@ export interface AuditRecordDto {
   readonly ipAddress: string | null;
   readonly createdAt: Date;
 }
+
+/**
+ * The published shape of an audit record. The interface above stays the type the
+ * code works with, because its JSON payloads are recursive; on the wire both
+ * payloads are objects, and that is what the description promises.
+ */
+export const auditRecordSchema = z
+  .object({
+    id: z.uuid(),
+    actorId: z.uuid().nullable(),
+    action: z.string(),
+    entityType: z.string(),
+    entityId: z.uuid().nullable(),
+    changes: z.record(z.string(), z.unknown()).nullable(),
+    metadata: z.record(z.string(), z.unknown()).nullable(),
+    ipAddress: z.string().nullable(),
+    createdAt: z.date(),
+  })
+  .meta({ id: 'AuditRecord' });
 
 export interface AuditListQuery {
   readonly page: number;

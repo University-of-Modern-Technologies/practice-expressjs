@@ -1,5 +1,5 @@
 import type { Request, RequestHandler } from 'express';
-import { AppError } from '../../common/errors/index.js';
+import { AppError, validationError } from '../../common/errors/index.js';
 import type { AuthContext } from '../../common/types/auth-context.js';
 import type { RbacService } from '../rbac/service.js';
 import type { PermissionScope } from '../rbac/types.js';
@@ -22,9 +22,6 @@ const permissionScope = async (rbac: RbacService, actorId: string): Promise<Perm
   if (!scope) throw new AppError('Forbidden', 403, 'FORBIDDEN');
   return scope;
 };
-
-const validationError = (details: unknown): AppError =>
-  new AppError('Invalid request', 400, 'VALIDATION_ERROR', details);
 
 export const createAuditController = (
   service: AuditService,

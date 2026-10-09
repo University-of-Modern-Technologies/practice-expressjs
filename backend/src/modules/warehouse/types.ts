@@ -1,3 +1,6 @@
+import { z } from 'zod';
+
+import { versionNumberSchema } from '../../common/openapi/index.js';
 import type { PermissionScope } from '../rbac/types.js';
 
 /** Movement kinds, mirroring the `StockMovementType` enum stored in the database. */
@@ -13,40 +16,57 @@ export type StockMovementType = (typeof stockMovementTypes)[number];
 /** Resource name used to build the `warehouse:read` / `warehouse:write` keys. */
 export const WAREHOUSE_RESOURCE = 'warehouse';
 
-export interface WarehouseDto {
-  readonly id: string;
-  readonly code: string;
-  readonly name: string;
-  readonly isActive: boolean;
-  readonly createdAt: Date;
-  readonly updatedAt: Date;
-}
+export const warehouseSchema = z
+  .object({
+    id: z.uuid(),
+    code: z.string().max(32).meta({ description: 'Незмінний після створення.' }),
+    name: z.string(),
+    isActive: z.boolean(),
+    createdAt: z.date(),
+    updatedAt: z.date(),
+  })
+  .meta({ id: 'Warehouse' });
 
-export interface StockLevelDto {
-  readonly id: string;
-  readonly warehouseId: string;
-  readonly productId: string;
-  readonly quantityOnHand: number;
-  readonly quantityReserved: number;
-  /** Derived, never stored: what the next reservation is actually allowed to take. */
-  readonly quantityAvailable: number;
-  readonly version: number;
-  readonly createdAt: Date;
-  readonly updatedAt: Date;
-}
+export type WarehouseDto = Readonly<z.infer<typeof warehouseSchema>>;
 
-export interface StockMovementDto {
-  readonly id: string;
-  readonly warehouseId: string;
-  readonly productId: string;
-  readonly type: StockMovementType;
-  readonly quantity: number;
-  readonly referenceType: string | null;
-  readonly referenceId: string | null;
-  readonly actorId: string | null;
-  readonly note: string | null;
-  readonly createdAt: Date;
-}
+export const stockLevelSchema = z
+  .object({
+    id: z.uuid(),
+    warehouseId: z.uuid(),
+    productId: z.uuid(),
+    quantityOnHand: z.int().min(0),
+    quantityReserved: z.int().min(0),
+    // Derived, never stored: what the next reservation is actually allowed to take.
+    quantityAvailable: z
+      .int()
+      .min(0)
+      .meta({ description: 'Похідне значення: quantityOnHand − quantityReserved.' }),
+    version: versionNumberSchema,
+    createdAt: z.date(),
+    updatedAt: z.date(),
+  })
+  .meta({ id: 'StockLevel' });
+
+export type StockLevelDto = Readonly<z.infer<typeof stockLevelSchema>>;
+
+export const stockMovementTypeSchema = z.enum(stockMovementTypes).meta({ id: 'StockMovementType' });
+
+export const stockMovementSchema = z
+  .object({
+    id: z.uuid(),
+    warehouseId: z.uuid(),
+    productId: z.uuid(),
+    type: stockMovementTypeSchema,
+    quantity: z.int(),
+    referenceType: z.string().nullable(),
+    referenceId: z.uuid().nullable(),
+    actorId: z.uuid().nullable(),
+    note: z.string().nullable(),
+    createdAt: z.date(),
+  })
+  .meta({ id: 'StockMovement' });
+
+export type StockMovementDto = Readonly<z.infer<typeof stockMovementSchema>>;
 
 /**
  * Stock is organisation-wide: unlike deals or contacts there is no owner column

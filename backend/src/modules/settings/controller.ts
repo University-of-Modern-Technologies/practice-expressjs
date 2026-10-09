@@ -1,6 +1,6 @@
 import type { Request, RequestHandler } from 'express';
 
-import { AppError } from '../../common/errors/app-error.js';
+import { AppError, validationError } from '../../common/errors/index.js';
 import type { AuthContext } from '../../common/types/auth-context.js';
 import type { SettingsService } from './service.js';
 import type { SettingsAccess } from './types.js';
@@ -23,9 +23,6 @@ const accessFor = (request: Request, actorId: string): SettingsAccess => ({
   ...(request.ip ? { ipAddress: request.ip } : {}),
 });
 
-const invalid = (details: unknown): AppError =>
-  new AppError('Invalid request', 400, 'VALIDATION_ERROR', details);
-
 export const createSettingsController = (service: SettingsService): SettingsController => ({
   list: async (_request, response) => {
     response.json({ data: await service.list() });
@@ -33,7 +30,7 @@ export const createSettingsController = (service: SettingsService): SettingsCont
 
   getByKey: async (request, response) => {
     const parsed = getSettingSchema.safeParse({ params: request.params });
-    if (!parsed.success) throw invalid(parsed.error.flatten());
+    if (!parsed.success) throw validationError(parsed.error.flatten());
     response.json({ data: await service.getByKey(parsed.data.params.key) });
   },
 
@@ -42,7 +39,7 @@ export const createSettingsController = (service: SettingsService): SettingsCont
       params: request.params,
       body: request.body,
     });
-    if (!parsed.success) throw invalid(parsed.error.flatten());
+    if (!parsed.success) throw validationError(parsed.error.flatten());
     const auth = getAuth(request);
     const { value, description } = parsed.data.body;
     response.json({
@@ -55,7 +52,7 @@ export const createSettingsController = (service: SettingsService): SettingsCont
 
   remove: async (request, response) => {
     const parsed = deleteSettingSchema.safeParse({ params: request.params });
-    if (!parsed.success) throw invalid(parsed.error.flatten());
+    if (!parsed.success) throw validationError(parsed.error.flatten());
     const auth = getAuth(request);
     await service.remove(accessFor(request, auth.userId), parsed.data.params.key);
     response.status(204).end();
