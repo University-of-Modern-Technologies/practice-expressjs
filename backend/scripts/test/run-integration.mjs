@@ -16,7 +16,7 @@ import {
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const require = createRequire(import.meta.url);
-const startStorageHint = 'Start the storage from the repository root: npm run start:infra';
+const startStorageHint = 'Start the storage from the repository root: npm run docker:db';
 // Long enough for a storage that is up, short enough not to keep a student
 // waiting on one that is not.
 const responseTimeoutMs = 3_000;

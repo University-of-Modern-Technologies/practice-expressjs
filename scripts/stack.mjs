@@ -160,7 +160,39 @@ function ensureEnv() {
   }
 }
 
+function ensureInstalled(dir) {
+  if (!existsSync(path.join(dir, 'node_modules'))) {
+    fail(`${path.basename(dir)} dependencies are not installed. Run \`npm run local:install\`.`);
+  }
+}
+
 const apiPort = () => Number(readEnv().API_PORT || 8000);
+const backend = path.join(root, 'backend');
+const frontend = path.join(root, 'frontend');
+
+// Each step starts the one before it and adds its own part: storage, then the
+// API, then the web client and the proxy. The step that is already up is
+// left as is, so starting a larger one over a smaller one costs seconds.
+
+function startStorage() {
+  ensureEnv();
+  requireDocker();
+  compose('dev', ['up', '-d', '--wait', ...storageServices]);
+  // Migrations and the base seed run once and exit; what is applied is skipped.
+  compose('dev', ['run', '--rm', '--build', 'migrate']);
+}
+
+function startApi() {
+  startStorage();
+  compose('dev', ['up', '-d', '--build', '--wait', '--no-deps', 'api']);
+}
+
+function startAll() {
+  startApi();
+  compose('dev', ['up', '-d', '--build', '--wait', '--no-deps', 'web']);
+  // After the web client, not with it: nginx resolves its upstreams on start.
+  compose('dev', ['up', '-d', '--build', '--wait', '--no-deps', 'nginx']);
+}
 
 function printAddresses() {
   const http = readEnv().HTTP_PORT || 8080;
@@ -216,106 +248,76 @@ const commands = {
       console.log(busy.join('\n'));
       console.log(
         yellow(
-          'If it is not this stack holding them, put other values into .env before `npm start`.',
+          'If it is not this stack holding them, put other values into .env before starting it.',
         ),
       );
     }
-    console.log(`\nNext: ${bold('npm start')}`);
+    console.log(`\nNext: ${bold('npm run docker:all')}`);
   },
 
-  start() {
+  'local:install'() {
+    run('npm', ['ci'], { cwd: backend });
+    run('npm', ['ci'], { cwd: frontend });
+  },
+
+  // One API port for every way of running it, so the web client always finds it.
+  // Two processes on one port do not fail on Windows, they split the traffic.
+  async 'local:api'() {
     ensureEnv();
-    requireDocker();
-    compose('dev', ['up', '-d', '--build', '--wait', ...extra]);
+    ensureInstalled(backend);
+    const port = apiPort();
+    if (!(await portIsFree(port))) {
+      fail(
+        `port ${port} is already taken, most likely by the api container of this stack.\n` +
+          'Stop the containers (npm run docker:stop) and run local:api again.',
+      );
+    }
+    startStorage();
+    run('npm', ['run', 'dev'], { cwd: backend });
+  },
+
+  'local:web'() {
+    ensureInstalled(frontend);
+    const env = { ...process.env, API_ORIGIN: `http://127.0.0.1:${apiPort()}` };
+    const webPort = String(readEnv().WEB_PORT || 3000);
+    run('npx', ['next', 'dev', '--port', webPort], { cwd: frontend, env });
+  },
+
+  'docker:db'() {
+    startStorage();
+    console.log(green('\nStorage is up and migrated. API on this machine: npm run local:api'));
+  },
+
+  'docker:api'() {
+    startApi();
+    console.log(green(`\nAPI: http://localhost:${apiPort()}/api/docs`));
+  },
+
+  'docker:all'() {
+    startAll();
     printAddresses();
   },
 
-  stop() {
-    compose('dev', ['--profile', 'tools', 'down', '--remove-orphans']);
-  },
-
-  // Production images are built once by `build`; starting only builds what is missing.
-  'prod:start'() {
+  // Builds what changed and starts it; an image that is up to date takes seconds.
+  'docker:prod'() {
     ensureEnv();
     requireDocker();
-    compose('prod', ['up', '-d', '--wait', ...extra]);
+    compose('prod', ['up', '-d', '--build', '--wait']);
     printAddresses();
   },
 
-  'prod:stop'() {
-    compose('prod', ['--profile', 'tools', 'down', '--remove-orphans']);
-  },
-
-  build() {
+  'docker:build'() {
     ensureEnv();
     requireDocker();
     compose('prod', ['build', ...extra]);
   },
 
-  test() {
-    run('npm', ['test'], { cwd: path.join(root, 'backend') });
-    run('npm', ['test'], { cwd: path.join(root, 'frontend') });
+  // Both modes share the project and its service names, so one `down` stops either.
+  'docker:stop'() {
+    compose('dev', ['--profile', 'tools', 'down', '--remove-orphans']);
   },
 
-  // The same scripts the CI jobs run, so a green `check` means a green pipeline.
-  check() {
-    commands['check:backend']();
-    commands['check:web']();
-  },
-
-  'check:backend'() {
-    run('npm', ['run', 'ci'], { cwd: path.join(root, 'backend') });
-  },
-
-  'check:web'() {
-    run('npm', ['run', 'ci'], { cwd: path.join(root, 'frontend') });
-  },
-
-  // Talks to the storage of `start:infra`; it never starts containers itself.
-  'test:integration'() {
-    run('npm', ['run', 'test:integration'], {
-      cwd: path.join(root, 'backend'),
-    });
-  },
-
-  'start:api'() {
-    ensureEnv();
-    requireDocker();
-    compose('dev', ['up', '-d', '--build', '--wait', 'api']);
-    console.log(green(`\nAPI: http://localhost:${apiPort()}/api/docs`));
-  },
-
-  // One API port for every way of running it, so the web client always finds it.
-  // Two processes on one port do not fail on Windows, they split the traffic.
-  async dev() {
-    ensureEnv();
-    const port = apiPort();
-    if (!(await portIsFree(port))) {
-      fail(
-        `port ${port} is already taken, most likely by the api container of this stack.\n` +
-          'Stop the stack (npm stop) and start the storage only (npm run start:infra).',
-      );
-    }
-    run('npm', ['run', 'dev'], { cwd: path.join(root, 'backend') });
-  },
-
-  'dev:web'() {
-    const env = { ...process.env, API_ORIGIN: `http://127.0.0.1:${apiPort()}` };
-    const webPort = String(readEnv().WEB_PORT || 3000);
-    run('npx', ['next', 'dev', '--port', webPort], {
-      cwd: path.join(root, 'frontend'),
-      env,
-    });
-  },
-
-  'start:infra'() {
-    ensureEnv();
-    requireDocker();
-    compose('dev', ['up', '-d', '--wait', ...storageServices]);
-    console.log(green('\nStorage is up. Start the API on this machine: npm run dev'));
-  },
-
-  async clean() {
+  async 'docker:clean'() {
     if (!(await confirm('This deletes the databases. Every record is lost.'))) {
       console.log('Cancelled.');
       return;
@@ -323,12 +325,22 @@ const commands = {
     compose('dev', ['--profile', 'tools', 'down', '--volumes', '--remove-orphans']);
   },
 
-  logs() {
+  'docker:logs'() {
     compose('dev', ['logs', '-f', '--tail=100', ...extra]);
   },
 
-  ps() {
+  'docker:ps'() {
     compose('dev', ['ps']);
+  },
+
+  'docker:portainer'() {
+    ensureEnv();
+    requireDocker();
+    const password = ensurePortainerPassword();
+    compose('dev', ['--profile', 'tools', 'up', '-d', 'portainer']);
+    console.log(green(`\nPortainer: http://localhost:${readEnv().PORTAINER_PORT || 9000}`));
+    console.log('  User:      admin');
+    console.log(`  Password:  ${password}  (from ${portainerPasswordFile})`);
   },
 
   'db:migrate'() {
@@ -341,14 +353,28 @@ const commands = {
     compose('dev', ['run', '--rm', 'migrate', 'npm', 'run', 'db:seed:demo']);
   },
 
-  tools() {
-    ensureEnv();
-    requireDocker();
-    const password = ensurePortainerPassword();
-    compose('dev', ['--profile', 'tools', 'up', '-d', 'portainer']);
-    console.log(green(`\nPortainer: http://localhost:${readEnv().PORTAINER_PORT || 9000}`));
-    console.log('  User:      admin');
-    console.log(`  Password:  ${password}  (from ${portainerPasswordFile})`);
+  test() {
+    run('npm', ['test'], { cwd: backend });
+    run('npm', ['test'], { cwd: frontend });
+  },
+
+  // The same scripts the CI jobs run, so a green `check` means a green pipeline.
+  check() {
+    commands['check:api']();
+    commands['check:web']();
+  },
+
+  'check:api'() {
+    run('npm', ['run', 'ci'], { cwd: backend });
+  },
+
+  'check:web'() {
+    run('npm', ['run', 'ci'], { cwd: frontend });
+  },
+
+  // Talks to the storage of `docker:db`; it never starts containers itself.
+  'test:integration'() {
+    run('npm', ['run', 'test:integration'], { cwd: backend });
   },
 };
 
