@@ -359,7 +359,8 @@ const commands = {
     run('npm', ['test'], { cwd: frontend });
   },
 
-  // The same scripts the CI jobs run, so a green `check` means a green pipeline.
+  // The API and web client jobs of CI; integration tests, the migrations check
+  // and the image build run there as well (`test:integration`, `docker:build`).
   check() {
     commands['check:api']();
     commands['check:web']();
