@@ -1,8 +1,11 @@
 import { describe, expect, it } from '@jest/globals';
+import { Router } from 'express';
 import pino from 'pino';
 import request from 'supertest';
+import { z } from 'zod';
 
 import { createMetricsRegistry } from '../common/observability/index.js';
+import { describeRoutes, ok } from '../common/openapi/index.js';
 import { createTestConfig } from '../test/config.js';
 import { createApp } from './create-app.js';
 
@@ -74,6 +77,43 @@ describe('service routes', () => {
       const response = await request(app).get(`/api/docs/${asset ?? ''}`);
       expect({ asset, status: response.status }).toEqual({ asset, status: 200 });
     }
+  });
+
+  it('serves the API description of the routers it mounts', async () => {
+    const router = Router();
+    describeRoutes(router, [{ name: 'Widgets', description: 'Widgets' }]).get(
+      '/',
+      { summary: 'List widgets', response: ok('Widgets', z.array(z.string())), refusals: {} },
+      (_request, response) => {
+        response.json({ data: [] });
+      },
+    );
+    const withWidgets = createApp({
+      config,
+      logger: pino({ level: 'silent' }),
+      routers: [{ path: '/api/v1/widgets', router }],
+    });
+
+    const response = await request(withWidgets).get('/api/openapi.json');
+
+    expect(response.body).toMatchObject({
+      openapi: '3.1.0',
+      paths: {
+        '/api/health/live': { get: expect.any(Object) },
+        '/api/v1/widgets': { get: { operationId: 'get_api_v1_widgets' } },
+      },
+    });
+  });
+
+  it('serves neither the description nor the docs page when they are switched off', async () => {
+    const withoutDocs = createApp({
+      config: createTestConfig({ apiDocsEnabled: false }),
+      logger: pino({ level: 'silent' }),
+    });
+
+    expect((await request(withoutDocs).get('/api/openapi.json')).status).toBe(404);
+    expect((await request(withoutDocs).get('/api/docs/')).status).toBe(404);
+    expect((await request(withoutDocs).get('/api/health/live')).status).toBe(200);
   });
 
   it('mounts metrics under /api once a scrape token is configured', async () => {

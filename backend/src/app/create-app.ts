@@ -17,14 +17,23 @@ import {
   createBearerTokenMetricsGuard,
   type MetricsRegistry,
 } from '../common/observability/index.js';
+import { buildOpenApiDocument, type MountedRouter } from '../common/openapi/index.js';
 import type { AppConfig } from '../config/env.js';
-import { openApiDocument } from '../config/swagger.js';
-import { createHealthRouter, type ReadinessCheck } from './health/health.routes.js';
+import { createHealthRouter, HEALTH_PATH, type ReadinessCheck } from './health/health.routes.js';
 
-export interface MountedRouter {
-  readonly path: string;
-  readonly router: Router;
-}
+export type { MountedRouter };
+
+export type OpenApiDocument = ReturnType<typeof buildOpenApiDocument>;
+
+/**
+ * The description of an application that mounts these routers beside the
+ * probes: the operations are whatever the routers registered with a description.
+ */
+export const describeApplication = (
+  routers: readonly MountedRouter[],
+  healthRouter: Router = createHealthRouter(),
+): OpenApiDocument =>
+  buildOpenApiDocument([{ path: HEALTH_PATH, router: healthRouter }, ...routers]);
 
 export interface CreateAppOptions {
   readonly config: AppConfig;
@@ -82,9 +91,14 @@ export const createApp = ({
   app.use(express.urlencoded({ extended: true, limit: config.jsonBodyLimit }));
   app.use(cookieParser());
 
-  app.use('/api/health', createHealthRouter(readinessChecks));
-  app.get('/api/openapi.json', (_request, response) => response.json(openApiDocument));
-  app.use('/api/docs', swaggerUi.serve, swaggerUi.setup(openApiDocument, { explorer: true }));
+  const healthRouter = createHealthRouter(readinessChecks);
+  app.use(HEALTH_PATH, healthRouter);
+  if (config.apiDocsEnabled) {
+    // Built once per application, by walking the very routers it mounts.
+    const openApiDocument = describeApplication(routers, healthRouter);
+    app.get('/api/openapi.json', (_request, response) => response.json(openApiDocument));
+    app.use('/api/docs', swaggerUi.serve, swaggerUi.setup(openApiDocument, { explorer: true }));
+  }
 
   if (authRateLimiter) app.use(AUTH_PATH, authRateLimiter);
   if (cacheInvalidation) app.use(cacheInvalidation);

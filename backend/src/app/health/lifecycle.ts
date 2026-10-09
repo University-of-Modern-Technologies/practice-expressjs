@@ -9,7 +9,8 @@
  * caller in between to thread an extra argument through.
  */
 
-export type LifecyclePhase = 'starting' | 'started' | 'draining' | 'stopped';
+export const lifecyclePhases = ['starting', 'started', 'draining', 'stopped'] as const;
+export type LifecyclePhase = (typeof lifecyclePhases)[number];
 
 export interface ServiceLifecycle {
   /** Current phase of the process. */

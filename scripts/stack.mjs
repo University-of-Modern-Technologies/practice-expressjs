@@ -194,12 +194,13 @@ function startAll() {
   compose('dev', ['up', '-d', '--build', '--wait', '--no-deps', 'nginx']);
 }
 
-function printAddresses() {
+// Production mode serves no API docs (API_DOCS_ENABLED is off there).
+function printAddresses({ docs = true } = {}) {
   const http = readEnv().HTTP_PORT || 8080;
   const password = readEnv('backend/.env').SEED_USER_PASSWORD;
   console.log('');
   console.log(green(`Ready: http://localhost:${http}`));
-  console.log(`  API docs:  http://localhost:${http}/api/docs`);
+  if (docs) console.log(`  API docs:  http://localhost:${http}/api/docs`);
   console.log(`  Health:    http://localhost:${http}/api/health/ready`);
   console.log('');
   console.log('  Sign in as admin@crm-training.example');
@@ -303,7 +304,7 @@ const commands = {
     ensureEnv();
     requireDocker();
     compose('prod', ['up', '-d', '--build', '--wait']);
-    printAddresses();
+    printAddresses({ docs: false });
   },
 
   'docker:build'() {

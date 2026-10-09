@@ -6,6 +6,7 @@ export {
 export { createDatabaseReadinessCheck, SchemaNotUpToDateError } from './database.js';
 export {
   createHealthRouter,
+  HEALTH_PATH,
   type HealthRouterOptions,
   type ReadinessCheck,
   type ReadinessCheckResult,

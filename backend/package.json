@@ -27,6 +27,7 @@
     "format": "prettier --check .",
     "format:write": "prettier --write .",
     "typecheck": "tsc --noEmit",
+    "openapi:generate": "tsx scripts/generate-openapi.ts",
     "test": "jest --runInBand",
     "test:integration": "node scripts/test/run-integration.mjs",
     "test:watch": "jest --watch",
@@ -47,10 +48,10 @@
     "pino": "10.3.1",
     "pino-http": "11.0.0",
     "rate-limit-redis": "6.0.1",
-    "swagger-jsdoc": "6.3.0",
     "swagger-ui-express": "5.0.1",
     "ws": "8.21.3",
-    "zod": "4.1.13"
+    "zod": "4.1.13",
+    "zod-openapi": "6.0.2"
   },
   "devDependencies": {
     "@eslint/js": "9.39.1",
@@ -63,7 +64,6 @@
     "@types/jsonwebtoken": "9.0.10",
     "@types/node": "22.20.1",
     "@types/supertest": "6.0.3",
-    "@types/swagger-jsdoc": "6.0.4",
     "@types/swagger-ui-express": "4.1.8",
     "@types/ws": "8.18.1",
     "eslint": "9.39.1",

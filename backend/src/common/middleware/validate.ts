@@ -9,9 +9,14 @@ interface RequestInput {
   readonly query: unknown;
 }
 
-export const validate =
-  (schema: z.ZodType<Partial<RequestInput>>): RequestHandler =>
-  (request, _response, next) => {
+type RequestInputSchema = z.ZodType<Partial<RequestInput>>;
+
+// Which schema each `validate()` middleware checks against. The API description
+// reads it from here, so a route is described with the very schema it enforces.
+const schemaByMiddleware = new WeakMap<RequestHandler, RequestInputSchema>();
+
+export const validate = (schema: RequestInputSchema): RequestHandler => {
+  const middleware: RequestHandler = (request, _response, next) => {
     const result = schema.safeParse({
       body: request.body as unknown,
       params: request.params,
@@ -39,3 +44,11 @@ export const validate =
     }
     next();
   };
+
+  schemaByMiddleware.set(middleware, schema);
+  return middleware;
+};
+
+/** The schema a middleware built by `validate()` checks; `undefined` for any other handler. */
+export const validatedSchemaOf = (handler: RequestHandler): RequestInputSchema | undefined =>
+  schemaByMiddleware.get(handler);

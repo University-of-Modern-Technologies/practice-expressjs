@@ -1,7 +1,14 @@
-export { createApp, type CreateAppOptions, type MountedRouter } from './create-app.js';
+export {
+  createApp,
+  describeApplication,
+  type CreateAppOptions,
+  type MountedRouter,
+  type OpenApiDocument,
+} from './create-app.js';
 export {
   createHealthRouter,
   createServiceLifecycle,
+  HEALTH_PATH,
   serviceLifecycle,
   type HealthRouterOptions,
   type LifecyclePhase,
