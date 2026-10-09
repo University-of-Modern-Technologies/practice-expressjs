@@ -5,4 +5,13 @@ export interface LoadEnvOptions {
   readonly backendRoot?: string;
 }
 
+/** Storage URLs built from their parts; `undefined` when a required part is missing. */
+export interface StorageUrls {
+  readonly DATABASE_URL: string | undefined;
+  readonly REDIS_URL: string | undefined;
+  readonly MONGODB_URL: string | undefined;
+}
+
+export declare const assembleStorageUrls: (env: NodeJS.ProcessEnv) => StorageUrls;
+
 export declare const loadEnv: (options?: LoadEnvOptions) => NodeJS.ProcessEnv;

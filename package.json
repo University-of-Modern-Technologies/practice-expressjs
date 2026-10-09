@@ -14,6 +14,10 @@
     "prod:stop": "node scripts/stack.mjs prod:stop",
     "build": "node scripts/stack.mjs build",
     "test": "node scripts/stack.mjs test",
+    "check": "node scripts/stack.mjs check",
+    "check:backend": "node scripts/stack.mjs check:backend",
+    "check:web": "node scripts/stack.mjs check:web",
+    "test:integration": "node scripts/stack.mjs test:integration",
     "start:api": "node scripts/stack.mjs start:api",
     "start:infra": "node scripts/stack.mjs start:infra",
     "dev": "node scripts/stack.mjs dev",
@@ -24,6 +28,11 @@
     "tools": "node scripts/stack.mjs tools",
     "db:migrate": "node scripts/stack.mjs db:migrate",
     "db:seed:demo": "node scripts/stack.mjs db:seed:demo",
-    "install:all": "npm --prefix backend ci && npm --prefix frontend ci"
+    "install:all": "npm --prefix backend ci && npm --prefix frontend ci",
+    "prepare": "husky"
+  },
+  "devDependencies": {
+    "husky": "9.1.7",
+    "lint-staged": "17.5.1"
   }
 }

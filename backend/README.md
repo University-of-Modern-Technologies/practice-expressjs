@@ -272,15 +272,17 @@ npm run lint       # ESLint
 npm run format     # перевірка Prettier
 npm run typecheck  # перевірка TypeScript
 npm test                    # unit та module-level тести
-npm run test:integration    # integration тести (потребують RUN_DB_TESTS=true)
+npm run test:integration    # integration тести (потребують npm run start:infra)
 npm run ci                  # статичні перевірки, unit-тести та build
 npm run prisma:generate     # перегенерувати клієнт бази після зміни схеми
 npm run prisma:validate     # перевірити саму схему
 ```
 
 `npm test` проходить без піднятих сховищ: наскрізні набори в нього не входять і
-названі окремим рядком у кінці прогону. Запускає їх `npm run test:integration`,
-і йому потрібна окрема тестова база — умови в `tests/integration/README.md`.
+названі окремим рядком у кінці прогону. Запускає їх `npm run test:integration`
+з цієї теки — після `npm run start:infra` у корені репозиторію. Тестові бази
+раннер виводить із того самого `.env` і створює сам; подробиці — у
+`tests/integration/README.md`.
 
 ## Демонстраційний набір даних
 

@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { loadEnv } from './load-env.cjs';
+import { assembleStorageUrls, loadEnv } from './load-env.cjs';
 
 const SHARED_ENV = [
   'APP_ENV=development',
@@ -193,5 +193,31 @@ describe('loadEnv', () => {
     loadEnv({ env, backendRoot });
 
     expect(env).toEqual(first);
+  });
+});
+
+describe('assembleStorageUrls', () => {
+  it('builds every URL from the parts alone, ignoring a URL already given', () => {
+    const urls = assembleStorageUrls({
+      DATABASE_URL: 'postgresql://ci:secret@db.internal:5432/crm_ci?schema=public',
+      POSTGRES_DB: 'crm',
+      POSTGRES_USER: 'crm',
+      POSTGRES_PASSWORD: 'crm',
+      MONGO_DB: 'events',
+    });
+
+    expect(urls).toEqual({
+      DATABASE_URL: 'postgresql://crm:crm@127.0.0.1:5432/crm?schema=public',
+      REDIS_URL: 'redis://127.0.0.1:6379',
+      MONGODB_URL: 'mongodb://127.0.0.1:27017/events',
+    });
+  });
+
+  it('leaves a URL undefined when a part it needs is missing', () => {
+    expect(assembleStorageUrls({})).toEqual({
+      DATABASE_URL: undefined,
+      REDIS_URL: 'redis://127.0.0.1:6379',
+      MONGODB_URL: undefined,
+    });
   });
 });

@@ -26,6 +26,6 @@ export default function reportIntegrationTier(): void {
 
   console.log(
     `\nNot in this run: ${pending} integration suites (live PostgreSQL, Redis and MongoDB).` +
-      `\nRun them with: npm run test:integration  (needs RUN_DB_TESTS=true)`,
+      `\nStart the storage from the repository root (npm run start:infra), then run here: npm run test:integration`,
   );
 }

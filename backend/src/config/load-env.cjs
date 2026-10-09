@@ -65,6 +65,15 @@ const ASSEMBLERS = [
 ];
 
 /**
+ * The storage URLs built from their parts alone, ignoring any URL `env`
+ * already holds. A URL whose required part is missing comes back `undefined`.
+ * The integration runner builds the test addresses with it, from the same
+ * parts the application uses.
+ */
+const assembleStorageUrls = (env) =>
+  Object.fromEntries(ASSEMBLERS.map(([name, assemble]) => [name, assemble(env)]));
+
+/**
  * Fills `env` from three layers, highest priority first: the variables the
  * process already has, the backend's own `.env`, and the repository's shared
  * `.env` one level up. A missing file is skipped.
@@ -94,10 +103,9 @@ const loadEnv = (options = {}) => {
   env.APP_ENV = appEnv;
   env.NODE_ENV = appEnv;
 
-  for (const [name, assemble] of ASSEMBLERS) {
+  for (const [name, url] of Object.entries(assembleStorageUrls(env))) {
     if (part(env, name)) continue;
 
-    const url = assemble(env);
     if (url) env[name] = url;
     else delete env[name];
   }
@@ -105,4 +113,4 @@ const loadEnv = (options = {}) => {
   return env;
 };
 
-module.exports = { loadEnv };
+module.exports = { assembleStorageUrls, loadEnv };

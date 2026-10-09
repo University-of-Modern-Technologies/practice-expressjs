@@ -56,13 +56,16 @@ function readEnv(file = '.env') {
   return values;
 }
 
+// npm and npx are `.cmd` shims on Windows and start only through a shell. A shell
+// joins separate arguments without escaping them, so the command goes in whole.
+function spawnTool(command, args, options) {
+  return process.platform === 'win32'
+    ? spawnSync([command, ...args].join(' '), { ...options, shell: true })
+    : spawnSync(command, args, options);
+}
+
 function run(command, args, { cwd = root, env = process.env } = {}) {
-  const result = spawnSync(command, args, {
-    cwd,
-    env,
-    stdio: 'inherit',
-    shell: process.platform === 'win32',
-  });
+  const result = spawnTool(command, args, { cwd, env, stdio: 'inherit' });
   if (result.error) fail(`${command} is not installed or not in PATH`, 2);
   if (result.status !== 0) process.exit(result.status ?? 1);
 }
@@ -131,6 +134,24 @@ function ensurePortainerPassword() {
   return readFileSync(target, 'utf8').trim();
 }
 
+// The pre-commit hook lives in the root package: `npm install` there brings
+// husky and lint-staged, and husky's `prepare` script wires the hook into git.
+function installHooks() {
+  const result = spawnTool('npm', ['install', '--no-audit', '--no-fund', '--loglevel=error'], {
+    cwd: root,
+    stdio: 'inherit',
+  });
+  if (result.status !== 0) {
+    console.log(yellow('The pre-commit hook was not installed; `npm install` in the root failed.'));
+  } else if (!existsSync(path.join(root, '.git'))) {
+    console.log(
+      yellow('Not a git repository: after `git init`, run setup again for the pre-commit hook.'),
+    );
+  } else {
+    console.log(green('Installed the pre-commit hook (format and lint of staged files)'));
+  }
+}
+
 function ensureEnv() {
   for (const [, target] of envFiles) {
     if (!existsSync(path.join(root, target))) {
@@ -155,7 +176,10 @@ function printAddresses() {
 
 async function confirm(question) {
   if (process.argv.includes('--yes') || process.argv.includes('-y')) return true;
-  const prompt = createInterface({ input: process.stdin, output: process.stdout });
+  const prompt = createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
   const answer = await prompt.question(yellow(`${question} Type "yes" to continue: `));
   prompt.close();
   return answer.trim() === 'yes';
@@ -179,6 +203,7 @@ const commands = {
       }
     }
     ensurePortainerPassword();
+    installHooks();
 
     const env = readEnv();
     const busy = [];
@@ -232,6 +257,27 @@ const commands = {
     run('npm', ['test'], { cwd: path.join(root, 'frontend') });
   },
 
+  // The same scripts the CI jobs run, so a green `check` means a green pipeline.
+  check() {
+    commands['check:backend']();
+    commands['check:web']();
+  },
+
+  'check:backend'() {
+    run('npm', ['run', 'ci'], { cwd: path.join(root, 'backend') });
+  },
+
+  'check:web'() {
+    run('npm', ['run', 'ci'], { cwd: path.join(root, 'frontend') });
+  },
+
+  // Talks to the storage of `start:infra`; it never starts containers itself.
+  'test:integration'() {
+    run('npm', ['run', 'test:integration'], {
+      cwd: path.join(root, 'backend'),
+    });
+  },
+
   'start:api'() {
     ensureEnv();
     requireDocker();
@@ -256,7 +302,10 @@ const commands = {
   'dev:web'() {
     const env = { ...process.env, API_ORIGIN: `http://127.0.0.1:${apiPort()}` };
     const webPort = String(readEnv().WEB_PORT || 3000);
-    run('npx', ['next', 'dev', '--port', webPort], { cwd: path.join(root, 'frontend'), env });
+    run('npx', ['next', 'dev', '--port', webPort], {
+      cwd: path.join(root, 'frontend'),
+      env,
+    });
   },
 
   'start:infra'() {
