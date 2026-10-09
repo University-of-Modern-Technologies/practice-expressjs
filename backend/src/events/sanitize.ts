@@ -5,6 +5,7 @@ const sensitiveKeys = new Set([
   'apikey',
   'authorization',
   'cookie',
+  'credential',
   'password',
   'passwordhash',
   'refreshtoken',

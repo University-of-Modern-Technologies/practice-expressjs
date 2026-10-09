@@ -355,10 +355,23 @@ const createModules = ({
   // stand-in and which against a real endpoint was already decided together,
   // once, rather than each looking at its own setting here.
   const integrationsController = createIntegrationsController(
-    createIntegrationsService(deliveryClient, { cache }),
+    createIntegrationsService(deliveryClient, {
+      cache,
+      quoteCacheTtlSeconds: config.deliveryQuoteCacheTtlSeconds,
+    }),
     rbacService,
   );
-  const aiController = createAiController(createAiService(aiProvider, { cache }), rbacService);
+  const aiController = createAiController(
+    createAiService(aiProvider, {
+      cache,
+      config: {
+        maxTokens: config.aiMaxTokens,
+        maxInputChars: config.aiMaxInputChars,
+        cacheTtlSeconds: config.aiCacheTtlSeconds,
+      },
+    }),
+    rbacService,
+  );
 
   return {
     realtime,
@@ -373,11 +386,23 @@ const createModules = ({
         path: '/api/v1/rbac',
         router: createRbacRouter(rbacController, authenticate, rbacService),
       },
-      { path: '/api/v1/contacts', router: createContactsRouter(contactsController, authenticate) },
-      { path: '/api/v1/deals', router: createDealsRouter(dealsController, authenticate) },
+      {
+        path: '/api/v1/contacts',
+        router: createContactsRouter(contactsController, authenticate, rbacService),
+      },
+      {
+        path: '/api/v1/deals',
+        router: createDealsRouter(dealsController, authenticate, rbacService),
+      },
       { path: '/api/v1/audit', router: createAuditRouter(auditController, authenticate) },
-      { path: '/api/v1/helpdesk', router: createHelpdeskRouter(helpdeskController, authenticate) },
-      { path: '/api/v1/calls', router: createCallsRouter(callsController, authenticate) },
+      {
+        path: '/api/v1/helpdesk',
+        router: createHelpdeskRouter(helpdeskController, authenticate, rbacService),
+      },
+      {
+        path: '/api/v1/calls',
+        router: createCallsRouter(callsController, authenticate, rbacService),
+      },
       { path: '/api/v1/finance', router: createFinanceRouter(financeController, authenticate) },
       { path: '/api/v1/products', router: createProductsRouter(productsController, authenticate) },
       { path: '/api/v1/orders', router: createOrdersRouter(ordersController, authenticate) },
@@ -395,9 +420,9 @@ const createModules = ({
       },
       {
         path: '/api/v1/integrations',
-        router: createIntegrationsRouter(integrationsController, authenticate),
+        router: createIntegrationsRouter(integrationsController, authenticate, rbacService),
       },
-      { path: '/api/v1/ai', router: createAiRouter(aiController, authenticate) },
+      { path: '/api/v1/ai', router: createAiRouter(aiController, authenticate, rbacService) },
     ],
   };
 };

@@ -5,6 +5,7 @@ import type { Logger } from 'pino';
 
 import type { AppConfig } from '../config/env.js';
 import type { AuthContext } from '../common/types/auth-context.js';
+import { sanitizeEventPayload } from '../events/sanitize.js';
 import { extractAccessToken } from './auth.js';
 import { parseRealtimeTopic, type RealtimeTopic } from './topics.js';
 import {
@@ -84,9 +85,10 @@ export const createRealtimeGateway = (deps: RealtimeGatewayDependencies): Realti
   const { config, verifyAccessToken } = deps;
   const logger = deps.logger.child({ component: 'realtime-gateway' });
   const options: RealtimeGatewayOptions = { ...DEFAULT_OPTIONS, ...deps.options };
-  const createServer =
-    deps.createWebSocketServer ??
-    (() => createDefaultWebSocketServer(options.maxInboundMessageBytes));
+  // The transport keeps its own, much higher ceiling: the inbound limit is
+  // enforced here, per frame, so an oversized frame is answered with an error
+  // frame instead of the transport closing the socket (see ws-server.ts).
+  const createServer = deps.createWebSocketServer ?? (() => createDefaultWebSocketServer());
 
   if (!deps.canSubscribe) {
     logger.warn('No canSubscribe callback injected; every subscription will be denied');
@@ -378,7 +380,14 @@ export const createRealtimeGateway = (deps: RealtimeGatewayDependencies): Realti
       const subscribers = topicIndex.get(parsed.topic);
       if (!subscribers || subscribers.size === 0) return;
 
-      const frame: OutboundFrame = { type: 'event', topic: parsed.topic, payload: event };
+      // The same redaction the event log applies on the way in: a secret that
+      // slipped into a domain payload must not reach a browser either. It also
+      // reduces the payload to plain JSON, so every subscriber gets one shape.
+      const frame: OutboundFrame = {
+        type: 'event',
+        topic: parsed.topic,
+        payload: sanitizeEventPayload(event),
+      };
       for (const connection of subscribers) {
         send(connection, frame);
       }

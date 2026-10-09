@@ -205,6 +205,26 @@ describe('cache service', () => {
       expect(redis.del).not.toHaveBeenCalled();
     });
 
+    it('resolves only after the last batch has been deleted', async () => {
+      // The final batch is followed straight away by the end of the scan, so a
+      // stream-event implementation can report completion while that delete is
+      // still in flight — and a caller then reads the stale entry back.
+      const deleted: string[] = [];
+      const redis = createRedisStub({
+        scanStream: jest.fn(() => Readable.from([['k:a'], ['k:b']], { objectMode: true })),
+        del: jest.fn(async (...keys: string[]) => {
+          await new Promise((resolve) => setTimeout(resolve, 20));
+          deleted.push(...keys);
+          return keys.length;
+        }),
+      });
+      const cache = createCacheService(asCacheRedis(redis), config, createLogger());
+
+      await cache.invalidatePrefix('k:');
+
+      expect(deleted).toEqual(['k:a', 'k:b']);
+    });
+
     it('fails open when the scan stream errors', async () => {
       const stream = new Readable({ objectMode: true, read: () => undefined });
       const redis = createRedisStub({ scanStream: jest.fn(() => stream) });

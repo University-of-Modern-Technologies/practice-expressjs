@@ -10,6 +10,7 @@ import type { Logger } from 'pino';
 
 import type { AuthContext } from '../common/types/auth-context.js';
 import { createRealtimeGateway, type RealtimeGatewayDependencies } from './gateway.js';
+import { createWebSocketServer as createDefaultWebSocketServer } from './ws-server.js';
 import {
   REALTIME_ERROR_CODES,
   SOCKET_STATE,
@@ -226,6 +227,42 @@ describe('realtime gateway — inbound message handling', () => {
     });
   });
 
+  it('keeps the socket open after an oversized frame, as after any malformed one', () => {
+    const { gateway } = createHarness({ options: { maxInboundMessageBytes: 32 } });
+    const socket = new FakeSocket();
+    gateway.handleConnection(socket, auth);
+
+    socket.emitMessage('x'.repeat(64));
+    send(socket, { type: 'ping' });
+
+    expect(socket.closeCalls).toEqual([]);
+    expect(socket.terminateCalls).toBe(0);
+    expect(socket.lastFrame()).toEqual({ type: 'pong' });
+    expect(gateway.getStats().connections).toBe(1);
+  });
+
+  it('leaves the transport ceiling to the transport, not the per-frame limit', () => {
+    // Handing the 8 KiB frame limit to the transport made it close the socket
+    // with 1009 before the gateway could answer MESSAGE_TOO_LARGE.
+    const factory = jest.mocked(createDefaultWebSocketServer);
+    factory.mockClear();
+    factory.mockReturnValue({
+      handleUpgrade: jest.fn(),
+      close: jest.fn(),
+    } as unknown as RealtimeWebSocketServer);
+
+    const gateway = createRealtimeGateway({
+      config: { wsPath: '/api/v1/realtime' },
+      logger: createFakeLogger(),
+      verifyAccessToken: () => auth,
+      options: { maxInboundMessageBytes: 32 },
+    });
+    gateway.attach(new EventEmitter() as unknown as HttpServer);
+
+    expect(factory).toHaveBeenCalledTimes(1);
+    expect(factory.mock.calls[0]).toEqual([]);
+  });
+
   it('replies to application-level pings', () => {
     const { gateway } = createHarness();
     const socket = new FakeSocket();
@@ -425,6 +462,32 @@ describe('realtime gateway — publish fan-out', () => {
 
     expect(first.lastFrame()).toMatchObject({ type: 'event', topic: 'entity:deal:d1' });
     expect(second.lastFrame()).toMatchObject({ type: 'event', topic: 'entity:deal:d1' });
+  });
+
+  it('redacts the payload exactly as the event log does', async () => {
+    const { gateway } = createHarness();
+    const socket = new FakeSocket();
+    gateway.handleConnection(socket, auth);
+    send(socket, { type: 'subscribe', topic: 'deals' });
+    await flush();
+
+    gateway.publish('deals', {
+      eventType: 'deal.updated',
+      payload: { name: 'Big deal', apiKey: 'k-1', nested: [{ password: 'p', credential: 'c' }] },
+    });
+
+    expect(socket.lastFrame()).toEqual({
+      type: 'event',
+      topic: 'deals',
+      payload: {
+        eventType: 'deal.updated',
+        payload: {
+          name: 'Big deal',
+          apiKey: '[REDACTED]',
+          nested: [{ password: '[REDACTED]', credential: '[REDACTED]' }],
+        },
+      },
+    });
   });
 
   it('skips sockets that are no longer open', async () => {

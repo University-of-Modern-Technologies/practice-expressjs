@@ -10,10 +10,10 @@ describe('extractAccessToken', () => {
     expect(extractAccessToken({ 'sec-websocket-protocol': 'bearer, token-3' })).toBe('token-3');
   });
 
-  it('reads the prefixed subprotocol form', () => {
-    expect(extractAccessToken({ 'sec-websocket-protocol': 'access_token.token-4' })).toBe(
-      'token-4',
-    );
+  it('does not accept a single-value access_token.<jwt> subprotocol', () => {
+    // A browser can never complete such a handshake: it needs the offered
+    // entry echoed, and echoing it would put the token into the response.
+    expect(extractAccessToken({ 'sec-websocket-protocol': 'access_token.token-4' })).toBeNull();
   });
 
   it('prefers the Authorization header over the subprotocol', () => {

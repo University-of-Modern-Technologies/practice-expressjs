@@ -1,3 +1,5 @@
+import { isIP } from 'node:net';
+
 import { z } from 'zod';
 
 import { loadEnv } from './load-env.cjs';
@@ -8,6 +10,50 @@ loadEnv();
 
 const DEFAULT_PORT = 8000;
 
+// The same bounds the sibling backend puts on its body limit.
+const MIN_BODY_LIMIT_BYTES = 1_024;
+const MAX_BODY_LIMIT_BYTES = 67_108_864;
+const DEFAULT_BODY_LIMIT_BYTES = 1_048_576;
+
+const BYTE_UNITS = { b: 1, kb: 1_024, mb: 1_024 ** 2, gb: 1_024 ** 3 } as const;
+
+/**
+ * A size such as `1mb`, `512kb` or `1048576` in bytes, in the binary units the
+ * body parser itself uses; anything else is `undefined`.
+ */
+export const parseByteSize = (value: string): number | undefined => {
+  const match = /^(\d+(?:\.\d+)?)\s*(b|kb|mb|gb)?$/i.exec(value.trim());
+  if (!match) return undefined;
+  const unit = (match[2]?.toLowerCase() ?? 'b') as keyof typeof BYTE_UNITS;
+  return Math.floor(Number(match[1]) * BYTE_UNITS[unit]);
+};
+
+const bodyLimitSchema = z.coerce.number().int().min(MIN_BODY_LIMIT_BYTES).max(MAX_BODY_LIMIT_BYTES);
+
+/** An address or a CIDR network, IPv4 or IPv6. */
+const isAddressOrNetwork = (entry: string): boolean => {
+  const [address = '', bits, ...rest] = entry.split('/');
+  const version = isIP(address);
+  if (version === 0 || rest.length > 0) return false;
+  if (bits === undefined) return true;
+  return /^\d+$/.test(bits) && Number(bits) <= (version === 4 ? 32 : 128);
+};
+
+const splitList = (value: string): string[] =>
+  value
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+
+/**
+ * A blank value means "not set", so the default applies: `KEY=` in a `.env`
+ * file behaves like a commented-out line, exactly as in the sibling backend.
+ */
+const withoutBlankValues = (source: NodeJS.ProcessEnv): NodeJS.ProcessEnv =>
+  Object.fromEntries(
+    Object.entries(source).filter(([, value]) => value !== undefined && value.trim() !== ''),
+  );
+
 const envSchema = z.object({
   APP_ENV: z.enum(['development', 'test', 'production']).default('development'),
   HOST: z.string().min(1).default('0.0.0.0'),
@@ -16,7 +62,32 @@ const envSchema = z.object({
   API_PORT: z.coerce.number().int().min(1).max(65_535).optional(),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
   CORS_ORIGINS: z.string().default('http://localhost:3000'),
-  JSON_BODY_LIMIT: z.string().min(1).default('1mb'),
+  // `JSON_BODY_LIMIT_BYTES` wins; `JSON_BODY_LIMIT` is the same size with a unit.
+  JSON_BODY_LIMIT: z
+    .string()
+    .transform((value, context): number => {
+      const bytes = parseByteSize(value);
+      if (bytes === undefined || bytes < MIN_BODY_LIMIT_BYTES || bytes > MAX_BODY_LIMIT_BYTES) {
+        context.addIssue({
+          code: 'custom',
+          message: `JSON_BODY_LIMIT must be a size such as 1mb or 512kb, from ${String(MIN_BODY_LIMIT_BYTES)} to ${String(MAX_BODY_LIMIT_BYTES)} bytes`,
+        });
+        return z.NEVER;
+      }
+      return bytes;
+    })
+    .optional(),
+  JSON_BODY_LIMIT_BYTES: bodyLimitSchema.optional(),
+  // Addresses or CIDR networks of the reverse proxies in front of the API. Only
+  // a request that arrives from one of them has its X-Forwarded-For believed.
+  TRUSTED_PROXIES: z
+    .string()
+    .refine((value) => splitList(value).every(isAddressOrNetwork), {
+      message: 'TRUSTED_PROXIES must be a comma-separated list of addresses or CIDR networks',
+    })
+    .optional(),
+  // Logs every SQL statement together with its parameters; never in production.
+  LOG_SQL: z.stringbool().default(false),
   DATABASE_URL: z.url(),
   JWT_ACCESS_SECRET: z.string().min(32),
   JWT_REFRESH_SECRET: z.string().min(32),
@@ -72,7 +143,7 @@ const envSchema = z.object({
   CALL_PROVIDER_TIMEOUT_MS: z.coerce.number().int().min(100).max(120_000).default(5_000),
   CALL_PROVIDER_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(10).default(3),
   CALL_PROVIDER_BACKOFF_MS: z.coerce.number().int().min(0).max(60_000).default(200),
-  CALL_SYNC_BATCH_SIZE: z.coerce.number().int().min(1).max(1_000).default(100),
+  CALL_SYNC_BATCH_SIZE: z.coerce.number().int().min(1).max(500).default(100),
 
   // Absent means each dependency picks its own stand-in exactly as it always
   // has (a mock AI provider, a stub delivery transport, a real cache backed by
@@ -87,7 +158,11 @@ export type AppConfig = Readonly<{
   port: number;
   logLevel: z.infer<typeof envSchema>['LOG_LEVEL'];
   corsOrigins: readonly string[];
-  jsonBodyLimit: string;
+  /** The largest request body accepted, in bytes. */
+  jsonBodyLimit: number;
+  /** Proxies whose X-Forwarded-For is believed; empty means none is. */
+  trustedProxies: readonly string[];
+  logSql: boolean;
   databaseUrl: string;
   jwtAccessSecret: string;
   jwtRefreshSecret: string;
@@ -133,7 +208,7 @@ export type AppConfig = Readonly<{
 }>;
 
 export const loadConfig = (source: NodeJS.ProcessEnv = process.env): AppConfig => {
-  const parsed = envSchema.safeParse(source);
+  const parsed = envSchema.safeParse(withoutBlankValues(source));
 
   if (!parsed.success) {
     const details = z.prettifyError(parsed.error);
@@ -145,10 +220,11 @@ export const loadConfig = (source: NodeJS.ProcessEnv = process.env): AppConfig =
     host: parsed.data.HOST,
     port: parsed.data.PORT ?? parsed.data.API_PORT ?? DEFAULT_PORT,
     logLevel: parsed.data.LOG_LEVEL,
-    corsOrigins: parsed.data.CORS_ORIGINS.split(',')
-      .map((origin) => origin.trim())
-      .filter(Boolean),
-    jsonBodyLimit: parsed.data.JSON_BODY_LIMIT,
+    corsOrigins: splitList(parsed.data.CORS_ORIGINS),
+    jsonBodyLimit:
+      parsed.data.JSON_BODY_LIMIT_BYTES ?? parsed.data.JSON_BODY_LIMIT ?? DEFAULT_BODY_LIMIT_BYTES,
+    trustedProxies: splitList(parsed.data.TRUSTED_PROXIES ?? ''),
+    logSql: parsed.data.LOG_SQL,
     databaseUrl: parsed.data.DATABASE_URL,
     jwtAccessSecret: parsed.data.JWT_ACCESS_SECRET,
     jwtRefreshSecret: parsed.data.JWT_REFRESH_SECRET,

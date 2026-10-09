@@ -1,6 +1,7 @@
 import type { NextFunction, Request, Response } from 'express';
 
 import { beforeEach, describe, expect, it, jest } from '@jest/globals';
+import jwt from 'jsonwebtoken';
 import type { Logger } from 'pino';
 
 import type { AppConfig } from '../../config/env.js';
@@ -37,7 +38,7 @@ interface RateLimitOptions {
   standardHeaders: string;
   legacyHeaders: boolean;
   passOnStoreError: boolean;
-  skip: () => boolean;
+  skip: (request?: Request) => boolean;
   keyGenerator: (request: Request) => string;
   handler: (request: Request, response: Response, next: NextFunction) => void;
   store: { options: { prefix: string; sendCommand: (...args: string[]) => unknown } };
@@ -49,7 +50,13 @@ const baseConfig = {
   rateLimitWindowSeconds: 60,
   rateLimitMaxRequests: 300,
   authRateLimitMaxRequests: 10,
+  jwtAccessSecret: 'rate-limit-test-access-secret-of-32-chars',
 } as AppConfig;
+
+const accessToken = (
+  claims: Record<string, unknown>,
+  secret = baseConfig.jwtAccessSecret,
+): string => jwt.sign(claims, secret, { expiresIn: 60 });
 
 const createLogger = (): Logger =>
   ({ warn: jest.fn(), error: jest.fn(), info: jest.fn(), debug: jest.fn() }) as unknown as Logger;
@@ -111,22 +118,67 @@ describe('rate limit middleware', () => {
     expect(lastOptions().skip()).toBe(true);
   });
 
-  it('keys by the authenticated user when there is one', async () => {
+  it('keys by the user of a valid access token, before any route authenticates', async () => {
     const { createRateLimiter } = await import('./rate-limit.js');
     createRateLimiter(createRedis(), baseConfig, createLogger());
 
+    const token = accessToken({ type: 'access', sub: 'user-1', sessionId: 'session-1' });
     const key = lastOptions().keyGenerator(
-      requestWith({ auth: { userId: 'user-1', sessionId: 'session-1' }, ip: '10.0.0.1' }),
+      requestWith({ headers: { authorization: `bearer ${token}` }, ip: '10.0.0.1' }),
     );
 
-    expect(key).toBe('user-1');
+    expect(key).toBe('user:user-1');
+  });
+
+  it('falls back to the address for a token it cannot trust', async () => {
+    const { createRateLimiter } = await import('./rate-limit.js');
+    createRateLimiter(createRedis(), baseConfig, createLogger());
+
+    const foreign = accessToken(
+      { type: 'access', sub: 'u' },
+      'another-secret-of-at-least-32-chars',
+    );
+    const unusable = [
+      'Bearer not-a-token',
+      `Bearer ${foreign}`,
+      `Bearer ${accessToken({ type: 'refresh', sub: 'user-1' })}`,
+      `Basic ${accessToken({ type: 'access', sub: 'user-1' })}`,
+    ];
+    for (const authorization of unusable) {
+      const key = lastOptions().keyGenerator(
+        requestWith({ headers: { authorization }, ip: '10.0.0.1' }),
+      );
+      expect(key).toBe('10.0.0.1/64');
+    }
   });
 
   it('falls back to the normalized client ip for anonymous requests', async () => {
     const { createRateLimiter } = await import('./rate-limit.js');
     createRateLimiter(createRedis(), baseConfig, createLogger());
 
-    expect(lastOptions().keyGenerator(requestWith({ ip: '10.0.0.1' }))).toBe('10.0.0.1/64');
+    expect(lastOptions().keyGenerator(requestWith({ headers: {}, ip: '10.0.0.1' }))).toBe(
+      '10.0.0.1/64',
+    );
+  });
+
+  it('leaves reading and ending a session out of the strict auth budget', async () => {
+    const { createAuthRateLimiter, isAuthBudgetExempt } = await import('./rate-limit.js');
+    createAuthRateLimiter(createRedis(), baseConfig, createLogger());
+
+    const at = (path: string): Request => requestWith({ baseUrl: '/api/v1/auth', path });
+    expect(lastOptions().skip(at('/me'))).toBe(true);
+    expect(lastOptions().skip(at('/logout/'))).toBe(true);
+    expect(lastOptions().skip(at('/login'))).toBe(false);
+    expect(lastOptions().skip(at('/refresh'))).toBe(false);
+    expect(isAuthBudgetExempt('/API/v1/auth/ME')).toBe(true);
+  });
+
+  it('keeps every path under the general budget', async () => {
+    const { createRateLimiter } = await import('./rate-limit.js');
+    createRateLimiter(createRedis(), baseConfig, createLogger());
+
+    const me = requestWith({ baseUrl: '', path: '/api/v1/auth/me' });
+    expect(lastOptions().skip(me)).toBe(false);
   });
 
   it('rejects with the standard error envelope code', async () => {

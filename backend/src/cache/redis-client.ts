@@ -14,6 +14,11 @@ const MAX_RETRIES_PER_REQUEST = 2;
 
 const CONNECT_TIMEOUT_MS = 5_000;
 
+// Upper bound on any single command, time spent queued included. The cache is
+// optional, so waiting on it is strictly worse than falling back to the source:
+// a command with no reply by now fails, and the caller reads the database.
+const COMMAND_TIMEOUT_MS = 2_000;
+
 export const createRedisClient = (config: AppConfig, logger: Logger): Redis => {
   // Unit tests build the whole application graph without infrastructure, so the
   // socket is opened on first use there instead of at construction time. That
@@ -26,6 +31,7 @@ export const createRedisClient = (config: AppConfig, logger: Logger): Redis => {
     maxRetriesPerRequest: MAX_RETRIES_PER_REQUEST,
     enableOfflineQueue: !isTest,
     connectTimeout: CONNECT_TIMEOUT_MS,
+    commandTimeout: COMMAND_TIMEOUT_MS,
     retryStrategy: (times: number) => Math.min(times * RETRY_STEP_MS, RETRY_MAX_DELAY_MS),
   });
 
@@ -38,6 +44,13 @@ export const createRedisClient = (config: AppConfig, logger: Logger): Redis => {
     logger.debug('Redis connection established');
   });
   client.on('ready', () => {
+    // The offline queue only exists to hold what is issued while the very
+    // first connection is still opening (the limiter loads its scripts at
+    // boot). Once connected, an outage must fail a command at once instead of
+    // parking the request behind the reconnect backoff, so the queue is turned
+    // off for the rest of the client's life. ioredis reads the option on every
+    // command, which is what makes the switch take effect.
+    client.options.enableOfflineQueue = false;
     logger.info('Redis client ready');
   });
   client.on('reconnecting', (delayMs: number) => {

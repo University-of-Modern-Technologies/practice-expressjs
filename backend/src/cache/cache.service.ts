@@ -88,18 +88,15 @@ export const createCacheService = (
           count: SCAN_BATCH_SIZE,
         });
 
-        await new Promise<void>((resolve, reject) => {
-          stream.on('data', (batch: string[]) => {
-            if (batch.length === 0) return;
-            // Pausing keeps memory bounded and guarantees `end` fires last.
-            stream.pause();
-            void service.del(batch.map(stripKeyPrefix)).finally(() => {
-              stream.resume();
-            });
-          });
-          stream.on('error', reject);
-          stream.on('end', resolve);
-        });
+        // Async iteration pulls the next batch only after the previous delete
+        // has finished, which keeps memory bounded and means the loop — and so
+        // this call — ends after the last delete, not merely after the last
+        // scan reply. Listening for `end` instead would resolve while the final
+        // batch is still being deleted.
+        for await (const batch of stream as AsyncIterable<string[]>) {
+          if (batch.length === 0) continue;
+          await service.del(batch.map(stripKeyPrefix));
+        }
       } catch (error) {
         logger.warn({ err: error, prefix }, 'Cache prefix invalidation failed');
       }

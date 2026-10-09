@@ -4,11 +4,14 @@ import type { IncomingHttpHeaders } from 'node:http';
  * Marker subprotocol. A browser client opens the socket as
  * `new WebSocket(url, ['bearer', accessToken])`; native clients may instead
  * send a normal `Authorization: Bearer <token>` header.
+ *
+ * There is deliberately no single-value form such as `access_token.<jwt>`. A
+ * browser fails any handshake whose response does not echo one of the offered
+ * subprotocols, and echoing that entry would put the token itself into the
+ * response headers — so such a form could only ever serve clients that can
+ * send `Authorization` anyway.
  */
 export const BEARER_SUBPROTOCOL = 'bearer';
-
-/** Alternative single-value form: `Sec-WebSocket-Protocol: access_token.<jwt>`. */
-export const ACCESS_TOKEN_SUBPROTOCOL_PREFIX = 'access_token.';
 
 const AUTHORIZATION_SCHEME = 'bearer ';
 
@@ -36,11 +39,6 @@ const fromSubprotocolHeader = (headers: IncomingHttpHeaders): string | null => {
   for (let index = 0; index < protocols.length; index += 1) {
     const entry = protocols[index];
     if (entry === undefined) continue;
-
-    if (entry.startsWith(ACCESS_TOKEN_SUBPROTOCOL_PREFIX)) {
-      const token = entry.slice(ACCESS_TOKEN_SUBPROTOCOL_PREFIX.length);
-      if (token.length > 0) return token;
-    }
 
     if (entry.toLowerCase() === BEARER_SUBPROTOCOL) {
       const token = protocols[index + 1];

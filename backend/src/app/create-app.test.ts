@@ -1,5 +1,5 @@
 import { describe, expect, it } from '@jest/globals';
-import { Router } from 'express';
+import { Router, type Express } from 'express';
 import pino from 'pino';
 import request from 'supertest';
 import { z } from 'zod';
@@ -130,5 +130,79 @@ describe('service routes', () => {
 
     expect(response.status).toBe(200);
     expect((await request(withMetrics).get('/metrics')).status).toBe(404);
+  });
+});
+
+describe('request bodies the parser refuses', () => {
+  const echo = Router();
+  echo.post('/', (request, response) => {
+    response.json({ received: request.body as unknown });
+  });
+  const withEcho = createApp({
+    config: createTestConfig({ jsonBodyLimit: 1_024 }),
+    logger: pino({ level: 'silent' }),
+    routers: [{ path: '/api/v1/echo', router: echo }],
+  });
+
+  it('answers 413 in the error envelope for a body above the limit', async () => {
+    const response = await request(withEcho)
+      .post('/api/v1/echo')
+      .set('content-type', 'application/json')
+      .send(JSON.stringify({ note: 'x'.repeat(2_048) }));
+
+    expect(response.status).toBe(413);
+    expect(response.body).toMatchObject({
+      error: { code: 'PAYLOAD_TOO_LARGE' },
+      requestId: expect.any(String),
+    });
+  });
+
+  it('answers 415 for a body in an encoding the parser cannot read', async () => {
+    const response = await request(withEcho)
+      .post('/api/v1/echo')
+      .set('content-type', 'application/json; charset=koi8-r')
+      .send('{}');
+
+    expect(response.status).toBe(415);
+    expect(response.body).toMatchObject({ error: { code: 'UNSUPPORTED_MEDIA_TYPE' } });
+  });
+
+  it('keeps answering 400 for malformed JSON', async () => {
+    const response = await request(withEcho)
+      .post('/api/v1/echo')
+      .set('content-type', 'application/json')
+      .send('{"broken":');
+
+    expect(response.status).toBe(400);
+    expect(response.body).toMatchObject({ error: { code: 'INVALID_JSON' } });
+  });
+});
+
+describe('client address behind a proxy', () => {
+  const whoami = Router();
+  whoami.get('/', (request, response) => {
+    response.json({ ip: request.ip });
+  });
+  const build = (trustedProxies: readonly string[]): Express =>
+    createApp({
+      config: createTestConfig({ trustedProxies }),
+      logger: pino({ level: 'silent' }),
+      routers: [{ path: '/api/v1/whoami', router: whoami }],
+    });
+
+  it('ignores X-Forwarded-For when no proxy is trusted', async () => {
+    const response = await request(build([]))
+      .get('/api/v1/whoami')
+      .set('x-forwarded-for', '203.0.113.7');
+
+    expect(response.body.ip).not.toBe('203.0.113.7');
+  });
+
+  it('takes the client address from a trusted proxy', async () => {
+    const response = await request(build(['127.0.0.1', '::1']))
+      .get('/api/v1/whoami')
+      .set('x-forwarded-for', '203.0.113.7');
+
+    expect(response.body.ip).toBe('203.0.113.7');
   });
 });
