@@ -1,0 +1,226 @@
+name: CI
+
+# Every check a change has to pass before it is merged. The jobs call the same
+# commands a developer runs on a laptop (`npm run check:api`, `check:web`,
+# `test:integration`, `docker:build`), so a green run here means the same as a
+# green run there. Nothing needs a secret: the workflow works in any fork as
+# soon as Actions are enabled there.
+
+# A merge into master runs these checks through `deploy.yml`, which calls this
+# workflow before it starts the system, so there is no separate push trigger.
+on:
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+# A new push to a pull request cancels the run it supersedes. On master every
+# commit keeps a run of its own and nothing is cancelled. Inside a called
+# workflow `github.workflow` is the caller's name, so the checks of a
+# deployment never share a group with the standalone run of the same commit.
+concurrency:
+  group: checks-${{ github.workflow }}-${{ github.ref == 'refs/heads/master' && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
+
+env:
+  NEXT_TELEMETRY_DISABLED: '1'
+
+jobs:
+  api:
+    name: API checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install the backend dependencies
+        working-directory: backend
+        run: npm ci
+
+      # Schema validation, lint, formatting, types, unit tests and the build.
+      - name: Run the API checks
+        run: node scripts/stack.mjs check:api
+
+  web:
+    name: Web client checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install the web client dependencies
+        working-directory: frontend
+        run: npm ci
+
+      # Formatting, lint, types, unit tests and the production build.
+      - name: Run the web client checks
+        run: node scripts/stack.mjs check:web
+
+  integration:
+    name: Integration tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # Real storage rather than mocks. Nothing else listens inside a runner, so
+    # the containers keep their default ports. The credentials exist only
+    # inside this runner and guard nothing outside it.
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: practice_crm_test
+          POSTGRES_USER: practice_crm
+          POSTGRES_PASSWORD: ci-only-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U practice_crm -d practice_crm_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+      mongo:
+        image: mongo:7.0
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --quiet --eval \"db.adminCommand('ping').ok\""
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+          --health-start-period 20s
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install the backend dependencies
+        working-directory: backend
+        run: npm ci
+
+      # The same command as on a laptop after `docker:db`. There is no `.env`
+      # here, so the storage addresses are given in full; the explicit `*_TEST`
+      # URLs outrank anything the runner would otherwise assemble. The run
+      # migrates and seeds the test database itself.
+      - name: Run the integration tests
+        env:
+          DATABASE_URL_TEST: postgresql://practice_crm:ci-only-password@127.0.0.1:5432/practice_crm_test?schema=public
+          REDIS_URL_TEST: redis://127.0.0.1:6379
+          MONGODB_URL_TEST: mongodb://127.0.0.1:27017/practice_events_test
+        run: node scripts/stack.mjs test:integration
+
+  migrations:
+    name: Migrations in sync with the schema
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: practice_crm_migrations
+          POSTGRES_USER: practice_crm
+          POSTGRES_PASSWORD: ci-only-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U practice_crm -d practice_crm_migrations"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      DATABASE_URL: postgresql://practice_crm:ci-only-password@127.0.0.1:5432/practice_crm_migrations?schema=public
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install the backend dependencies
+        run: npm ci
+
+      - name: Apply every migration to an empty database
+        run: npm run db:migrate:deploy
+
+      # Exit code 2 means the migrated database and `schema.prisma` differ: the
+      # schema was changed without a migration, or a migration without the schema.
+      # The printed difference says which way.
+      - name: Compare the migrated database with the schema
+        run: npm run prisma -- migrate diff --from-url "$DATABASE_URL" --to-schema-datamodel prisma/schema.prisma --exit-code
+
+  images:
+    name: Production images
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+
+      # `docker:build` reads the two `.env` files, as on a laptop; `setup`
+      # creates them from the tracked examples.
+      - name: Create the configuration
+        run: node scripts/stack.mjs setup
+
+      # Built and kept on this runner only: nothing is pushed anywhere.
+      - name: Build the production images
+        run: node scripts/stack.mjs docker:build
+
+  # One check that stands for all of them, so branch protection needs a single
+  # required check. It runs even when a job before it failed, and it fails
+  # unless every job succeeded.
+  ci-success:
+    name: ci-success
+    if: always()
+    needs: [api, web, integration, migrations, images]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every check to pass
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          echo "$RESULTS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          echo "$RESULTS" | jq -e 'all(.[]; .result == "success")' > /dev/null
