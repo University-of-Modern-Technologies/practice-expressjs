@@ -63,6 +63,17 @@ describe('warehouse validation', () => {
     ).toBe(true);
   });
 
+  it('bounds an adjustment to the same magnitude as every other movement', () => {
+    const adjust = (delta: number) =>
+      adjustStockSchema.safeParse({ body: { warehouseId, productId, delta, note: 'count' } })
+        .success;
+
+    expect(adjust(1_000_000_000)).toBe(true);
+    expect(adjust(-1_000_000_000)).toBe(true);
+    expect(adjust(1_000_000_001)).toBe(false);
+    expect(adjust(-1_000_000_001)).toBe(false);
+  });
+
   it('rejects a movement date range that ends before it starts', () => {
     const result = listMovementsSchema.safeParse({
       query: { createdFrom: '2026-02-01T00:00:00Z', createdTo: '2026-01-01T00:00:00Z' },

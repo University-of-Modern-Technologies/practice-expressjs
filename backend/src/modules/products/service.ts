@@ -94,6 +94,13 @@ const mapPersistenceError = (error: unknown): never => {
   throw error;
 };
 
+const isSkuTaken = (error: unknown): boolean =>
+  error instanceof AppError && error.code === 'PRODUCT_SKU_TAKEN';
+
+/** `LIKE` treats `%` and `_` as wildcards; a search term means them literally. */
+const escapeLikeTerm = (term: string | undefined): string | undefined =>
+  term?.replace(/[\\%_]/g, (character) => `\\${character}`);
+
 const findActive = async (
   store: ProductsTransaction['product'],
   id: string,
@@ -128,12 +135,32 @@ export const createProductsService = (
 
   const readPage = createListReader({ model: db.product, select: productSelection, toDto });
 
+  /**
+   * The unique index covers deleted entries too, so a SKU that was retired
+   * together with its product can never be issued again. The database has
+   * already refused the insert; this only names the reason. The lookup runs
+   * after the failed transaction is gone, so it decides nothing about
+   * uniqueness — it explains a refusal that has already happened.
+   */
+  const explainSkuConflict = async (error: unknown, sku: string): Promise<unknown> => {
+    if (!isSkuTaken(error)) return error;
+    const holder = await db.product.findFirst({ where: { sku }, select: { deletedAt: true } });
+    if (holder?.deletedAt) {
+      return new AppError(
+        'This SKU belongs to a deleted product and cannot be reused',
+        409,
+        'PRODUCT_SKU_RETIRED',
+      );
+    }
+    return error;
+  };
+
   return {
     async list(_access, query) {
       const where = filter<Prisma.ProductWhereInput>({ deletedAt: null })
         .equals('category', query.category)
         .equals('isActive', query.isActive)
-        .search(query.search, ['name', 'sku'])
+        .search(escapeLikeTerm(query.search), ['name', 'sku'])
         .range('unitPrice', query.minPrice, query.maxPrice)
         .build();
       return readPage({
@@ -150,35 +177,39 @@ export const createProductsService = (
 
     async create(access, data) {
       assertUnitPrice(data.unitPrice);
-      const created = await db.$transaction(async (transaction) => {
-        let product: ProductRecord;
-        try {
-          product = await transaction.product.create({
-            data: {
-              sku: data.sku,
-              name: data.name,
-              description: data.description ?? null,
-              category: data.category ?? null,
-              unitPrice: data.unitPrice,
-              currency: data.currency ?? 'USD',
-              isActive: data.isActive ?? true,
-            },
-            select: productSelection,
+      const created = await db
+        .$transaction(async (transaction) => {
+          let product: ProductRecord;
+          try {
+            product = await transaction.product.create({
+              data: {
+                sku: data.sku,
+                name: data.name,
+                description: data.description ?? null,
+                category: data.category ?? null,
+                unitPrice: data.unitPrice,
+                currency: data.currency ?? 'USD',
+                isActive: data.isActive ?? true,
+              },
+              select: productSelection,
+            });
+          } catch (error) {
+            return mapPersistenceError(error);
+          }
+          const dto = toDto(product);
+          await audit.record(transaction, {
+            actorId: access.actorId,
+            action: 'product.created',
+            entityType: 'product',
+            entityId: product.id,
+            changes: { after: dto },
+            ...(access.ipAddress ? { ipAddress: access.ipAddress } : {}),
           });
-        } catch (error) {
-          return mapPersistenceError(error);
-        }
-        const dto = toDto(product);
-        await audit.record(transaction, {
-          actorId: access.actorId,
-          action: 'product.created',
-          entityType: 'product',
-          entityId: product.id,
-          changes: { after: dto },
-          ...(access.ipAddress ? { ipAddress: access.ipAddress } : {}),
+          return dto;
+        })
+        .catch(async (error: unknown) => {
+          throw await explainSkuConflict(error, data.sku);
         });
-        return dto;
-      });
 
       announce({
         eventType: 'product.created',

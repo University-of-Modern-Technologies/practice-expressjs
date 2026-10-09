@@ -35,6 +35,7 @@ export const createProductsRouter = (
       response: ok('Сторінка товарів', pageOf(productSchema)),
       refusals: refusals(401, 403),
     },
+    controller.authorize.read,
     validate(listProductsSchema),
     controller.list,
   );
@@ -46,6 +47,7 @@ export const createProductsRouter = (
       response: ok('Товар', productSchema),
       refusals: refusals(401, 403, 404),
     },
+    controller.authorize.read,
     validate(getProductSchema),
     controller.getById,
   );
@@ -55,10 +57,12 @@ export const createProductsRouter = (
       summary: 'Створити товар',
       description:
         'Потребує дозволу `products:write`. SKU нормалізується до верхнього регістру. ' +
-        'Помилки: 409 `PRODUCT_SKU_TAKEN`, 400 `INVALID_PRODUCT_PRICE`.',
+        'Помилки: 409 `PRODUCT_SKU_TAKEN`; 409 `PRODUCT_SKU_RETIRED` — SKU належав ' +
+        'видаленому товару й повторно не видається; 400 `INVALID_PRODUCT_PRICE`.',
       response: created('Товар створено', productSchema),
       refusals: refusals(401, 403, 409),
     },
+    controller.authorize.write,
     validate(createProductSchema),
     controller.create,
   );
@@ -74,6 +78,7 @@ export const createProductsRouter = (
       response: ok('Товар оновлено', productSchema),
       refusals: refusals(401, 403, 404, 409),
     },
+    controller.authorize.write,
     validate(updateProductSchema),
     controller.update,
   );
@@ -87,6 +92,7 @@ export const createProductsRouter = (
       response: noContent('Товар видалено'),
       refusals: refusals(401, 403, 404, 409),
     },
+    controller.authorize.delete,
     validate(deleteProductSchema),
     controller.delete,
   );

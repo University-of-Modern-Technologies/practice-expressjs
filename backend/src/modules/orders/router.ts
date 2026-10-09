@@ -31,6 +31,10 @@ const concurrencyNote =
 const draftNote =
   'Рядки та грошові поля змінюються лише поки замовлення в статусі DRAFT, інакше 409 ' +
   '`ORDER_NOT_EDITABLE`.';
+const capNote = 'Якщо після зміни рядків знижка перевищила б підсумок, її зменшено до підсумку.';
+const amountNote =
+  '400 `ORDER_AMOUNT_OUT_OF_RANGE` — сума рядка, підсумок або разом перевищили б ' +
+  '999999999999.99.';
 
 export const createOrdersRouter = (
   controller: OrdersController,
@@ -54,6 +58,7 @@ export const createOrdersRouter = (
       response: ok('Сторінка замовлень', pageOf(orderSchema)),
       refusals: refusals(401, 403),
     },
+    controller.authorize.read,
     validate(listOrdersSchema),
     controller.list,
   );
@@ -65,6 +70,7 @@ export const createOrdersRouter = (
       response: ok('Замовлення', orderSchema),
       refusals: refusals(401, 403, 404),
     },
+    controller.authorize.read,
     validate(getOrderSchema),
     controller.getById,
   );
@@ -74,12 +80,15 @@ export const createOrdersRouter = (
       summary: 'Створити замовлення',
       description:
         'Потребує дозволу `orders:write`. Номер, статус і суми обчислює сервер: замовлення ' +
-        'створюється у статусі DRAFT. Помилки: 404 `CONTACT_NOT_FOUND`, `DEAL_NOT_FOUND`, ' +
-        '`PRODUCT_NOT_FOUND`; 409 `PRODUCT_INACTIVE`, `ORDER_CURRENCY_MISMATCH`, ' +
-        '`ORDER_ITEM_DUPLICATE`, `ORDER_NUMBER_UNAVAILABLE`.',
+        'створюється у статусі DRAFT. Власник — наявний активний користувач. ' +
+        'Помилки: 404 `CONTACT_NOT_FOUND`, `DEAL_NOT_FOUND`, ' +
+        '`PRODUCT_NOT_FOUND`, `ORDER_OWNER_NOT_FOUND`; 409 `PRODUCT_INACTIVE`, ' +
+        '`ORDER_CURRENCY_MISMATCH`, `ORDER_ITEM_DUPLICATE`, `ORDER_NUMBER_UNAVAILABLE`; ' +
+        `400 \`ORDER_TOTALS_INVALID\` — знижка більша за підсумок; ${amountNote}`,
       response: created('Замовлення створено', orderSchema),
       refusals: refusals(401, 403, 404, 409),
     },
+    controller.authorize.write,
     validate(createOrderSchema),
     controller.create,
   );
@@ -96,6 +105,7 @@ export const createOrdersRouter = (
       response: created('Замовлення продубльовано', orderSchema),
       refusals: refusals(401, 403, 404, 409),
     },
+    controller.authorize.write,
     validate(duplicateOrderSchema),
     controller.duplicate,
   );
@@ -106,11 +116,13 @@ export const createOrdersRouter = (
       description:
         'Потребує дозволу `orders:write`. Статус, номер і суми не приймаються від клієнта. ' +
         `${concurrencyNote} ${draftNote} ` +
-        'Помилки: 404 `ORDER_NOT_FOUND`, `CONTACT_NOT_FOUND`, `DEAL_NOT_FOUND`; ' +
-        '409 `ORDER_CURRENCY_MISMATCH`.',
+        'Помилки: 404 `ORDER_NOT_FOUND`, `CONTACT_NOT_FOUND`, `DEAL_NOT_FOUND`, ' +
+        '`ORDER_OWNER_NOT_FOUND`; 409 `ORDER_CURRENCY_MISMATCH`; 400 `ORDER_TOTALS_INVALID` — ' +
+        'надіслана знижка більша за підсумок.',
       response: ok('Замовлення оновлено', orderSchema),
       refusals: refusals(401, 403, 404, 409),
     },
+    controller.authorize.write,
     validate(updateOrderSchema),
     controller.update,
   );
@@ -122,11 +134,13 @@ export const createOrdersRouter = (
       description:
         'Потребує дозволу `orders:write`. Ціна й назва фіксуються знімком каталогу. ' +
         `${concurrencyNote} ${draftNote} ` +
-        'Помилки: 404 `ORDER_NOT_FOUND`, `PRODUCT_NOT_FOUND`; 409 `ORDER_ITEM_DUPLICATE`, ' +
-        '`PRODUCT_INACTIVE`, `ORDER_CURRENCY_MISMATCH`.',
+        'Помилки: 404 `ORDER_NOT_FOUND`, `PRODUCT_NOT_FOUND`; 409 `ORDER_ITEM_DUPLICATE` ' +
+        '(перевіряється раніше за стан товару в каталозі), `PRODUCT_INACTIVE`, ' +
+        `\`ORDER_CURRENCY_MISMATCH\`; ${amountNote}`,
       response: created('Рядок додано; повертається все замовлення', orderSchema),
       refusals: refusals(401, 403, 404, 409),
     },
+    controller.authorize.write,
     validate(addOrderItemSchema),
     controller.addItem,
   );
@@ -138,10 +152,11 @@ export const createOrdersRouter = (
       description:
         'Потребує дозволу `orders:write`. ' +
         `${concurrencyNote} ${draftNote} ` +
-        'Помилки: 404 `ORDER_NOT_FOUND`, `ORDER_ITEM_NOT_FOUND`.',
+        `${capNote} Помилки: 404 \`ORDER_NOT_FOUND\`, \`ORDER_ITEM_NOT_FOUND\`; ${amountNote}`,
       response: ok('Рядок оновлено; повертається все замовлення', orderSchema),
       refusals: refusals(401, 403, 404, 409),
     },
+    controller.authorize.write,
     validate(updateOrderItemSchema),
     controller.updateItem,
   );
@@ -153,10 +168,11 @@ export const createOrdersRouter = (
       description:
         'Потребує дозволу `orders:write`. ' +
         `${concurrencyNote} ${draftNote} ` +
-        'Помилки: 404 `ORDER_NOT_FOUND`, `ORDER_ITEM_NOT_FOUND`.',
+        `${capNote} Помилки: 404 \`ORDER_NOT_FOUND\`, \`ORDER_ITEM_NOT_FOUND\`.`,
       response: ok('Рядок вилучено; повертається все замовлення', orderSchema),
       refusals: refusals(401, 403, 404, 409),
     },
+    controller.authorize.write,
     validate(removeOrderItemSchema),
     controller.removeItem,
   );
@@ -169,11 +185,13 @@ export const createOrdersRouter = (
       description:
         'Потребує дозволу `orders:write`. Дозволені переходи: DRAFT → CONFIRMED/CANCELLED, ' +
         'CONFIRMED → PAID/CANCELLED, PAID → FULFILLED/CANCELLED; FULFILLED і CANCELLED — ' +
-        `кінцеві. ${concurrencyNote} Помилки: 404 \`ORDER_NOT_FOUND\`; ` +
+        'кінцеві. Підтвердити можна лише чернетку з рядками; скасувати — і порожню. ' +
+        `${concurrencyNote} Помилки: 404 \`ORDER_NOT_FOUND\`; ` +
         '409 `INVALID_ORDER_STATUS_TRANSITION`, `ORDER_HAS_NO_ITEMS`.',
       response: ok('Статус замовлення змінено', orderSchema),
       refusals: refusals(401, 403, 404, 409),
     },
+    controller.authorize.write,
     validate(transitionOrderSchema),
     controller.transition,
   );
@@ -185,6 +203,7 @@ export const createOrdersRouter = (
       response: noContent('Замовлення видалено'),
       refusals: refusals(401, 403, 404, 409),
     },
+    controller.authorize.delete,
     validate(deleteOrderSchema),
     controller.delete,
   );

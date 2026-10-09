@@ -57,7 +57,7 @@ interface OrderRecord extends Omit<
 
 type OrdersTransaction = Pick<
   PrismaTransaction,
-  'auditLog' | 'contact' | 'deal' | 'order' | 'orderItem' | 'product'
+  'auditLog' | 'contact' | 'deal' | 'order' | 'orderItem' | 'product' | 'user'
 >;
 export type OrdersDatabase = Pick<PrismaDatabase, '$transaction' | 'order'>;
 
@@ -82,6 +82,18 @@ export interface OrdersService {
 const DEFAULT_CURRENCY = 'USD';
 /** Bounded so a pathological collision streak fails fast instead of looping. */
 const ORDER_NUMBER_ATTEMPTS = 5;
+
+/**
+ * A status change walks every line of the order on one transaction, and a
+ * confirmation or fulfilment of a long order can outlast Prisma's defaults
+ * (2 s to start, 5 s to finish). The limits are stated here rather than
+ * inherited, so a large order is not cut off halfway by a default nobody chose.
+ */
+export const TRANSITION_TRANSACTION_OPTIONS = { maxWait: 5_000, timeout: 20_000 } as const;
+
+/** `LIKE` treats `%` and `_` as wildcards; a search term means them literally. */
+const escapeLikeTerm = (term: string | undefined): string | undefined =>
+  term?.replace(/[\\%_]/g, (character) => `\\${character}`);
 
 const orderItemSelection = {
   id: true,
@@ -114,7 +126,12 @@ export const orderSelection = {
   createdAt: true,
   updatedAt: true,
   deletedAt: true,
-  items: { select: orderItemSelection, orderBy: { createdAt: 'asc' as const } },
+  // Oldest line first; lines written together share a timestamp, so the id
+  // breaks the tie and the order stays the same on every read.
+  items: {
+    select: orderItemSelection,
+    orderBy: [{ createdAt: 'asc' as const }, { id: 'asc' as const }],
+  },
 };
 
 const toItemDto = (item: OrderItemRecord): OrderItemDto => ({
@@ -162,9 +179,23 @@ const isOrderNumberConflict = (error: unknown): boolean => {
   return fields.length === 0 || fields.some((field) => /order_?number/i.test(field));
 };
 
+const isForeignKeyError = (error: unknown): boolean =>
+  typeof error === 'object' && error !== null && 'code' in error && error.code === 'P2003';
+
+const ownerNotFound = (): AppError => new AppError('Owner not found', 404, 'ORDER_OWNER_NOT_FOUND');
+
+/**
+ * Only the one-product-per-order index means a duplicate line; a foreign key
+ * on the owner means the account vanished between the check and the write.
+ * Anything else is not the caller's doing and is left to surface as it is.
+ */
 const mapItemPersistenceError = (error: unknown): never => {
   if (isUniqueConstraintError(error)) {
     throw new AppError('This product is already on the order', 409, 'ORDER_ITEM_DUPLICATE');
+  }
+  const fieldName = (error as { meta?: { field_name?: unknown } } | null)?.meta?.field_name;
+  if (isForeignKeyError(error) && /owner/i.test(String(fieldName ?? ''))) {
+    throw ownerNotFound();
   }
   throw error;
 };
@@ -223,6 +254,21 @@ const assertContactAccess = async (
     select: { id: true },
   });
   if (!contact) throw new AppError('Contact not found', 404, 'CONTACT_NOT_FOUND');
+};
+
+/**
+ * An owner is a colleague, not a record the caller owns, so the narrowed scope
+ * does not apply here — only an existing, active account may hold an order.
+ */
+const assertOwnerAssignable = async (
+  transaction: OrdersTransaction,
+  ownerId: string,
+): Promise<void> => {
+  const owner = await transaction.user.findFirst({
+    where: { id: ownerId, isActive: true },
+    select: { id: true },
+  });
+  if (!owner) throw ownerNotFound();
 };
 
 const assertDealAccess = async (
@@ -300,15 +346,23 @@ const resolveLines = async (
   });
 };
 
+/**
+ * `capDiscount` is set where the discount is not part of the request: a line
+ * that is removed or reduced lowers a discount that would otherwise exceed the
+ * new subtotal, instead of blocking the edit. A discount the caller sends
+ * explicitly is never lowered — an oversized one is refused.
+ */
 const totalsFor = (
   lineTotals: readonly string[],
   discountTotal: DecimalLike,
   taxTotal: DecimalLike,
+  capDiscount = false,
 ): OrderTotals =>
   calculateOrderTotals({
     lineTotals,
     discountTotal: discountTotal.toString(),
     taxTotal: taxTotal.toString(),
+    capDiscount,
   });
 
 /**
@@ -417,7 +471,7 @@ export const createOrdersService = (
       access,
       existing.id,
       { version: existing.version, status: existing.status },
-      totalsFor(lineTotals, existing.discountTotal, existing.taxTotal),
+      totalsFor(lineTotals, existing.discountTotal, existing.taxTotal, true),
     );
 
   /**
@@ -489,6 +543,9 @@ export const createOrdersService = (
 
     const created = await withOrderNumber(async (orderNumber) =>
       db.$transaction(async (transaction) => {
+        // The caller's own account is already known to be active; anybody
+        // else named as the owner has to be checked.
+        if (ownerId !== access.actorId) await assertOwnerAssignable(transaction, ownerId);
         await assertContactAccess(transaction, access, data.contactId);
         await assertDealAccess(transaction, access, data.dealId);
         const lines = await resolveLines(transaction, currency, data.items ?? []);
@@ -551,7 +608,7 @@ export const createOrdersService = (
         .equals('contactId', query.contactId)
         .equals('dealId', query.dealId)
         .equals('status', query.status)
-        .search(query.search, ['orderNumber'])
+        .search(escapeLikeTerm(query.search), ['orderNumber'])
         .range('total', query.minTotal, query.maxTotal)
         .build();
       return readPage({
@@ -588,6 +645,7 @@ export const createOrdersService = (
         assertCurrentVersion(existing.version, data.version);
         const ownerId = data.ownerId ?? existing.ownerId;
         ensureOwnerAccess(access, ownerId);
+        if (ownerId !== existing.ownerId) await assertOwnerAssignable(transaction, ownerId);
         // Money and currency reshape the order itself, so they follow the same
         // draft-only rule as the lines; descriptive fields stay editable until
         // the order reaches a terminal status.
@@ -610,11 +668,14 @@ export const createOrdersService = (
         }
         await assertContactAccess(transaction, access, data.contactId);
         await assertDealAccess(transaction, access, data.dealId);
-        // Totals are always derived, never taken from the request body.
+        // Totals are always derived, never taken from the request body. A
+        // discount the caller sends is checked as sent; one carried over from
+        // the stored order is only kept within the subtotal.
         const totals = totalsFor(
           existing.items.map((item) => item.lineTotal.toString()),
           data.discountTotal ?? existing.discountTotal,
           data.taxTotal ?? existing.taxTotal,
+          data.discountTotal === undefined,
         );
         const updated = await applyOrderUpdate(
           transaction,
@@ -659,6 +720,13 @@ export const createOrdersService = (
         const existing = await findActive(transaction.order, access, id);
         assertCurrentVersion(existing.version, data.version);
         assertOrderEditable(existing.status);
+        // Checked against the order before the catalogue is consulted, so a
+        // product already on the order is reported as a duplicate whatever has
+        // happened to it in the catalogue since. The unique index stays the
+        // backstop for a concurrent add.
+        if (existing.items.some((candidate) => candidate.productId === data.productId)) {
+          throw new AppError('This product is already on the order', 409, 'ORDER_ITEM_DUPLICATE');
+        }
         const lines = await resolveLines(transaction, existing.currency, [
           { productId: data.productId, quantity: data.quantity },
         ]);
@@ -790,7 +858,7 @@ export const createOrdersService = (
         const existing = await findActive(transaction.order, access, id);
         assertCurrentVersion(existing.version, data.version);
         assertOrderStatusTransition(existing.status, data.status);
-        assertOrderHasItems(existing.status, existing.items.length);
+        assertOrderHasItems(existing.status, existing.items.length, data.status);
         const transitioned = await applyOrderUpdate(
           transaction,
           access,
@@ -821,7 +889,7 @@ export const createOrdersService = (
           ...(access.ipAddress ? { ipAddress: access.ipAddress } : {}),
         });
         return { before, after, stockPublishers };
-      });
+      }, TRANSITION_TRANSACTION_OPTIONS);
 
       // The stock events belong to the warehouse module, which decides what
       // they say; the order only decides when they are safe to publish.

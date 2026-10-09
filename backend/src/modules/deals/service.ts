@@ -25,7 +25,7 @@ interface DealRecord extends Omit<DealDto, 'amount'> {
   readonly deletedAt: Date | null;
 }
 
-type DealsTransaction = Pick<PrismaTransaction, 'auditLog' | 'contact' | 'deal'>;
+type DealsTransaction = Pick<PrismaTransaction, 'auditLog' | 'contact' | 'deal' | 'user'>;
 export type DealsDatabase = Pick<PrismaDatabase, '$transaction' | 'deal'>;
 
 export interface DealsService {
@@ -60,6 +60,14 @@ const toDto = ({ amount, deletedAt: _deletedAt, ...deal }: DealRecord): DealDto 
 });
 
 const toDate = (value: string): Date => new Date(`${value}T00:00:00.000Z`);
+
+/**
+ * A search term is matched literally. The filter becomes `LIKE`, where `%` and
+ * `_` are wildcards, so a caller searching for "100%" would otherwise match
+ * every title that merely contains "100".
+ */
+const literalSearch = (term: string | undefined): string | undefined =>
+  term?.replace(/[\\%_]/g, '\\$&');
 
 const defaultProbability: Readonly<Record<DealStage, number>> = {
   LEAD: 10,
@@ -115,6 +123,23 @@ const findActive = async (
   return deal;
 };
 
+/**
+ * An owner is a colleague who can still sign in. Naming anybody else is the
+ * caller's mistake about a person, reported as such, rather than a foreign key
+ * failing somewhere below.
+ */
+const assertOwnerExists = async (
+  transaction: DealsTransaction,
+  ownerId: string | undefined,
+): Promise<void> => {
+  if (ownerId === undefined) return;
+  const owner = await transaction.user.findFirst({
+    where: { id: ownerId, isActive: true },
+    select: { id: true },
+  });
+  if (!owner) throw new AppError('Owner not found', 404, 'DEAL_OWNER_NOT_FOUND');
+};
+
 const assertContactAccess = async (
   transaction: DealsTransaction,
   access: DealAccess,
@@ -162,7 +187,7 @@ export const createDealsService = (
         .equals('ownerId', ownerId)
         .equals('contactId', query.contactId)
         .equals('stage', query.stage)
-        .search(query.search, ['title'])
+        .search(literalSearch(query.search), ['title'])
         .range('amount', query.minAmount, query.maxAmount)
         .range('probability', query.minProbability, query.maxProbability)
         .range('expectedCloseDate', query.expectedCloseFrom, query.expectedCloseTo, toDate)
@@ -188,6 +213,7 @@ export const createDealsService = (
       const probability = data.probability ?? defaultProbability[stage];
       assertDealProbability(stage, probability);
       const created = await db.$transaction(async (transaction) => {
+        await assertOwnerExists(transaction, data.ownerId);
         await assertContactAccess(transaction, access, data.contactId);
         const deal = await transaction.deal.create({
           data: {
@@ -233,6 +259,7 @@ export const createDealsService = (
         assertCurrentVersion(existing.version, data.version);
         const ownerId = data.ownerId ?? existing.ownerId;
         ensureOwnerAccess(access, ownerId);
+        await assertOwnerExists(transaction, data.ownerId);
         await assertContactAccess(transaction, access, data.contactId);
         const probability = data.probability ?? existing.probability;
         assertDealProbability(existing.stage, probability);

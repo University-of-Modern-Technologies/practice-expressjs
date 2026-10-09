@@ -66,6 +66,13 @@ export interface TransitionDealData {
   readonly probability?: number | undefined;
 }
 
+/**
+ * Highest page a list request may ask for: far beyond any real pipeline, and
+ * low enough that the row offset it implies stays a small integer for the
+ * database instead of making the query itself fail.
+ */
+export const MAX_DEAL_PAGE = 1_000_000;
+
 export const dealSortFields = [
   'createdAt',
   'updatedAt',

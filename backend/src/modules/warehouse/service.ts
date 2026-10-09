@@ -237,6 +237,26 @@ const isStockCheckViolation = (error: unknown): boolean => {
   return stockCheckConstraints.some((constraint) => text.includes(constraint));
 };
 
+/**
+ * The stock columns are 32-bit integers. A movement is bounded on its own, but
+ * a receipt on top of a full shelf can still add up past the column, which the
+ * database would reject as a numeric overflow. It is refused here instead, as a
+ * request the store cannot represent rather than as a server fault.
+ */
+export const MAX_STOCK_QUANTITY = 2_147_483_647;
+
+const stockQuantityOutOfRange = (): AppError =>
+  new AppError(
+    'The resulting stock level exceeds the largest quantity that can be stored',
+    400,
+    'STOCK_QUANTITY_OUT_OF_RANGE',
+    { field: 'quantityOnHand', max: MAX_STOCK_QUANTITY },
+  );
+
+/** `LIKE` treats `%` and `_` as wildcards; a search term means them literally. */
+const escapeLikeTerm = (term: string | undefined): string | undefined =>
+  term?.replace(/[\\%_]/g, (character) => `\\${character}`);
+
 const insufficientStock = (): AppError =>
   new AppError('Not enough stock available for this operation', 409, 'INSUFFICIENT_STOCK');
 
@@ -299,6 +319,9 @@ const assertPlanIsSatisfiable = (
   if (quantityReserved < 0) throw insufficientReservation();
   if (quantityOnHand < 0) throw insufficientStock();
   if (quantityReserved > quantityOnHand) throw insufficientStock();
+  // Reserved units never exceed the units on hand, so bounding the shelf
+  // bounds both columns.
+  if (quantityOnHand > MAX_STOCK_QUANTITY) throw stockQuantityOutOfRange();
   return { quantityOnHand, quantityReserved };
 };
 
@@ -636,7 +659,7 @@ export const createWarehouseService = (
     async listWarehouses(_access, query) {
       const where = filter<Prisma.WarehouseWhereInput>()
         .equals('isActive', query.isActive)
-        .search(query.search, ['code', 'name'])
+        .search(escapeLikeTerm(query.search), ['code', 'name'])
         .build();
       return readWarehousePage({
         where,

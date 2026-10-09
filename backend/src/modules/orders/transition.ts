@@ -43,8 +43,18 @@ export const assertOrderEditable = (status: OrderStatus): void => {
   }
 };
 
-/** An empty order carries no value, so it may never leave the draft stage. */
-export const assertOrderHasItems = (status: OrderStatus, itemCount: number): void => {
+/**
+ * An empty order carries no value, so it may never move forward out of the
+ * draft stage. Abandoning it is another matter: cancelling an empty draft
+ * promises nothing and moves no stock, so `to = CANCELLED` is always let
+ * through.
+ */
+export const assertOrderHasItems = (
+  status: OrderStatus,
+  itemCount: number,
+  to?: OrderStatus,
+): void => {
+  if (to === 'CANCELLED') return;
   if (orderState(status).requiresItems && itemCount === 0) {
     throw new AppError(
       'An order without items cannot leave the draft stage',

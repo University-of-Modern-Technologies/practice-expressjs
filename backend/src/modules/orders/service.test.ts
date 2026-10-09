@@ -3,7 +3,12 @@ import { describe, expect, it, jest } from '@jest/globals';
 import { AppError } from '../../common/errors/index.js';
 import type { DomainEventNotification, DomainEventPublisher } from '../../common/types/index.js';
 import type { AuditService } from '../audit/service.js';
-import { createOrdersService, type OrdersDatabase } from './service.js';
+import {
+  TRANSITION_TRANSACTION_OPTIONS,
+  createOrdersService,
+  orderSelection,
+  type OrdersDatabase,
+} from './service.js';
 import type { OrderAccess, OrderStatus } from './types.js';
 
 const access: OrderAccess = { actorId: 'actor-1', scope: 'OWN' };
@@ -54,12 +59,17 @@ const draftOrder = {
 
 const withStatus = (status: OrderStatus): typeof draftOrder => ({ ...draftOrder, status });
 
+/** A draft with no lines yet, so adding product-1 to it is not a duplicate. */
+const emptyDraft: typeof draftOrder = { ...draftOrder, items: [] };
+
 interface HarnessOptions {
   readonly order?: typeof draftOrder;
   readonly products?: readonly (typeof product)[];
   readonly orderUpdate?: (args: unknown) => Promise<unknown>;
   readonly orderCreate?: (args: unknown) => Promise<unknown>;
   readonly itemCreate?: (args: unknown) => Promise<unknown>;
+  /** What the active-user lookup for an assigned owner finds; null means nobody. */
+  readonly owner?: { readonly id: string } | null;
 }
 
 const createHarness = (options: HarnessOptions = {}) => {
@@ -80,14 +90,20 @@ const createHarness = (options: HarnessOptions = {}) => {
     product: { findMany: findProducts },
     contact: { findFirst: jest.fn(async (_args: unknown) => ({ id: 'contact-1' })) },
     deal: { findFirst: jest.fn(async (_args: unknown) => ({ id: 'deal-1' })) },
+    user: {
+      findFirst: jest.fn(async (_args: unknown) =>
+        options.owner === undefined ? { id: 'owner-1' } : options.owner,
+      ),
+    },
     auditLog: { create: jest.fn() },
   };
   const findMany = jest.fn(async (_args: unknown) => [current]);
   const count = jest.fn(async (_args: unknown) => 1);
   const db = {
     order: { findFirst, findMany, count },
-    $transaction: jest.fn(async (callback: (value: typeof transaction) => Promise<unknown>) =>
-      callback(transaction),
+    $transaction: jest.fn(
+      async (callback: (value: typeof transaction) => Promise<unknown>, _options?: unknown) =>
+        callback(transaction),
     ),
   } as unknown as OrdersDatabase;
   const record = jest.fn(async () => undefined);
@@ -105,6 +121,8 @@ const createHarness = (options: HarnessOptions = {}) => {
     createItem,
     updateItem,
     deleteItems,
+    findProducts,
+    findOwner: transaction.user.findFirst,
     record,
     publish,
   };
@@ -222,7 +240,10 @@ describe('orders service catalogue guards', () => {
   });
 
   it('rejects a line that references an inactive product', async () => {
-    const harness = createHarness({ products: [{ ...product, isActive: false }] });
+    const harness = createHarness({
+      order: emptyDraft,
+      products: [{ ...product, isActive: false }],
+    });
 
     await expect(
       harness.service.addItem(access, draftOrder.id, {
@@ -235,7 +256,10 @@ describe('orders service catalogue guards', () => {
   });
 
   it('refuses to mix currencies on one order', async () => {
-    const harness = createHarness({ products: [{ ...product, currency: 'EUR' }] });
+    const harness = createHarness({
+      order: emptyDraft,
+      products: [{ ...product, currency: 'EUR' }],
+    });
 
     await expect(
       harness.service.addItem(access, draftOrder.id, {
@@ -255,8 +279,9 @@ describe('orders service catalogue guards', () => {
     ).rejects.toMatchObject({ statusCode: 409, code: 'ORDER_CURRENCY_MISMATCH' });
   });
 
-  it('reports a product that is already on the order as a conflict', async () => {
+  it('reports a product added concurrently by another request as a conflict', async () => {
     const harness = createHarness({
+      order: emptyDraft,
       itemCreate: async () => {
         throw { code: 'P2002', meta: { target: ['order_id', 'product_id'] } };
       },
@@ -624,7 +649,7 @@ describe('orders service domain event fan-out', () => {
   });
 
   it('announces item changes with their own event types', async () => {
-    const added = createHarness();
+    const added = createHarness({ order: emptyDraft });
     await added.service.addItem(access, draftOrder.id, {
       version: 1,
       productId: product.id,
@@ -665,5 +690,191 @@ describe('orders service domain event fan-out', () => {
     await expect(
       harness.service.transition(access, draftOrder.id, { version: 1, status: 'CONFIRMED' }),
     ).resolves.toMatchObject({ id: draftOrder.id });
+  });
+});
+
+describe('orders service owner assignment', () => {
+  const allAccess: OrderAccess = { actorId: 'actor-1', scope: 'ALL' };
+
+  it('refuses to create an order for an owner who is unknown or deactivated', async () => {
+    const harness = createHarness({ owner: null });
+
+    await expect(
+      harness.service.create(allAccess, { ownerId: 'ghost-user' }),
+    ).rejects.toMatchObject({ statusCode: 404, code: 'ORDER_OWNER_NOT_FOUND' });
+    expect(harness.findOwner).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'ghost-user', isActive: true } }),
+    );
+    expect(harness.createOrder).not.toHaveBeenCalled();
+  });
+
+  it('does not look the caller up when the caller is the owner', async () => {
+    const harness = createHarness({ owner: null });
+
+    await harness.service.create(allAccess, {});
+
+    expect(harness.findOwner).not.toHaveBeenCalled();
+    expect(harness.createOrder).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses to hand an existing order to an unknown owner', async () => {
+    const harness = createHarness({ owner: null });
+
+    await expect(
+      harness.service.update(allAccess, draftOrder.id, { version: 1, ownerId: 'ghost-user' }),
+    ).rejects.toMatchObject({ statusCode: 404, code: 'ORDER_OWNER_NOT_FOUND' });
+    expect(harness.updateOrder).not.toHaveBeenCalled();
+  });
+
+  it('reports an owner removed between the check and the write as not found, not as a duplicate', async () => {
+    const harness = createHarness({
+      orderCreate: async () => {
+        throw { code: 'P2003', meta: { field_name: 'orders_owner_id_fkey (index)' } };
+      },
+    });
+
+    await expect(harness.service.create(allAccess, { ownerId: 'owner-1' })).rejects.toMatchObject({
+      statusCode: 404,
+      code: 'ORDER_OWNER_NOT_FOUND',
+    });
+  });
+});
+
+describe('orders service empty drafts', () => {
+  it('lets an empty draft be cancelled', async () => {
+    const harness = createHarness({ order: { ...draftOrder, items: [] } });
+
+    await harness.service.transition(access, draftOrder.id, { version: 1, status: 'CANCELLED' });
+
+    expect(harness.updateOrder).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ status: 'CANCELLED' }) as unknown,
+      }),
+    );
+  });
+});
+
+describe('orders service discount bounds', () => {
+  const discounted = { ...draftOrder, discountTotal: '50.00', total: '9.97' };
+
+  it('refuses a discount larger than the subtotal even when the tax would hide it', async () => {
+    const harness = createHarness();
+
+    await expect(
+      harness.service.update(access, draftOrder.id, {
+        version: 1,
+        discountTotal: '70.00',
+        taxTotal: '20.00',
+      }),
+    ).rejects.toMatchObject({ statusCode: 400, code: 'ORDER_TOTALS_INVALID' });
+    expect(harness.updateOrder).not.toHaveBeenCalled();
+  });
+
+  it('lowers the discount to the new subtotal when a line is removed', async () => {
+    const harness = createHarness({ order: discounted });
+
+    await harness.service.removeItem(access, draftOrder.id, item.id, 1);
+
+    expect(harness.updateOrder).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          subtotal: '0.00',
+          discountTotal: '0.00',
+          total: '0.00',
+        }) as unknown,
+      }),
+    );
+  });
+
+  it('lowers the discount when a quantity is reduced below it', async () => {
+    const harness = createHarness({ order: discounted });
+
+    await harness.service.updateItem(access, draftOrder.id, item.id, { version: 1, quantity: 1 });
+
+    expect(harness.updateOrder).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          subtotal: '19.99',
+          discountTotal: '19.99',
+          total: '0.00',
+        }) as unknown,
+      }),
+    );
+  });
+});
+
+describe('orders service amount range', () => {
+  it('refuses a line whose total would not fit the money column, before writing', async () => {
+    const harness = createHarness({
+      products: [{ ...product, unitPrice: '999999999999.99' }],
+    });
+
+    await expect(
+      harness.service.create(access, { items: [{ productId: product.id, quantity: 2 }] }),
+    ).rejects.toMatchObject({
+      statusCode: 400,
+      code: 'ORDER_AMOUNT_OUT_OF_RANGE',
+      details: { field: 'lineTotal', max: '999999999999.99' },
+    });
+    expect(harness.createOrder).not.toHaveBeenCalled();
+  });
+});
+
+describe('orders service line order', () => {
+  it('reads the lines oldest first, with the id breaking a timestamp tie', () => {
+    expect(orderSelection.items.orderBy).toEqual([{ createdAt: 'asc' }, { id: 'asc' }]);
+  });
+});
+
+describe('orders service add-item check order', () => {
+  it('reports a product already on the order as a duplicate before consulting the catalogue', async () => {
+    const harness = createHarness({ products: [{ ...product, isActive: false }] });
+
+    await expect(
+      harness.service.addItem(access, draftOrder.id, {
+        version: 1,
+        productId: product.id,
+        quantity: 1,
+      }),
+    ).rejects.toMatchObject({ statusCode: 409, code: 'ORDER_ITEM_DUPLICATE' });
+    expect(harness.findProducts).not.toHaveBeenCalled();
+    expect(harness.createItem).not.toHaveBeenCalled();
+  });
+});
+
+describe('orders service transition transaction', () => {
+  it('runs a status change with explicit transaction limits', async () => {
+    const harness = createHarness();
+
+    await harness.service.transition(access, draftOrder.id, { version: 1, status: 'CONFIRMED' });
+
+    expect(harness.db.$transaction).toHaveBeenCalledWith(
+      expect.any(Function),
+      TRANSITION_TRANSACTION_OPTIONS,
+    );
+    expect(TRANSITION_TRANSACTION_OPTIONS.timeout).toBeGreaterThan(5_000);
+    expect(TRANSITION_TRANSACTION_OPTIONS.maxWait).toBeGreaterThan(2_000);
+  });
+});
+
+describe('orders service search', () => {
+  it('matches the search term literally, escaping LIKE wildcards', async () => {
+    const harness = createHarness();
+
+    await harness.service.list(access, {
+      page: 1,
+      pageSize: 20,
+      search: '10%_off\\',
+      sortBy: 'createdAt',
+      sortOrder: 'desc',
+    });
+
+    expect(harness.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          OR: [{ orderNumber: { contains: '10\\%\\_off\\\\', mode: 'insensitive' } }],
+        }) as unknown,
+      }),
+    );
   });
 });

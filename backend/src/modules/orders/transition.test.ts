@@ -76,4 +76,13 @@ describe('order editability', () => {
       assertOrderHasItems('CONFIRMED', 0);
     }).not.toThrow();
   });
+
+  it('refuses to confirm an empty draft but lets it be cancelled', () => {
+    expect(() => {
+      assertOrderHasItems('DRAFT', 0, 'CONFIRMED');
+    }).toThrow(expect.objectContaining({ statusCode: 409, code: 'ORDER_HAS_NO_ITEMS' }));
+    expect(() => {
+      assertOrderHasItems('DRAFT', 0, 'CANCELLED');
+    }).not.toThrow();
+  });
 });

@@ -30,7 +30,7 @@ import {
 const stockWriteErrors =
   'Помилки: 404 `WAREHOUSE_NOT_FOUND`, `PRODUCT_NOT_FOUND`; 409 `WAREHOUSE_INACTIVE`, ' +
   '`STOCK_CONCURRENT_MODIFICATION` — рівень запасів змінив паралельний запит, операцію ' +
-  'треба повторити.';
+  'треба повторити; 400 `STOCK_QUANTITY_OUT_OF_RANGE` — залишок перевищив би 2147483647.';
 
 const stockOperation = (summary: string, description: string): ApiOperation => ({
   tags: ['Stock'],
@@ -67,6 +67,7 @@ export const createWarehouseRouter = (
       response: ok('Сторінка складів', pageOf(warehouseSchema)),
       refusals: refusals(401, 403),
     },
+    controller.authorize.read,
     validate(listWarehousesSchema),
     controller.listWarehouses,
   );
@@ -78,6 +79,7 @@ export const createWarehouseRouter = (
       response: ok('Склад', warehouseSchema),
       refusals: refusals(401, 403, 404),
     },
+    controller.authorize.read,
     validate(getWarehouseSchema),
     controller.getWarehouse,
   );
@@ -91,6 +93,7 @@ export const createWarehouseRouter = (
       response: created('Склад створено', warehouseSchema),
       refusals: refusals(401, 403, 409),
     },
+    controller.authorize.write,
     validate(createWarehouseSchema),
     controller.createWarehouse,
   );
@@ -104,6 +107,7 @@ export const createWarehouseRouter = (
       response: ok('Склад оновлено', warehouseSchema),
       refusals: refusals(401, 403, 404),
     },
+    controller.authorize.write,
     validate(updateWarehouseSchema),
     controller.updateWarehouse,
   );
@@ -117,6 +121,7 @@ export const createWarehouseRouter = (
       response: ok('Сторінка рівнів запасів', pageOf(stockLevelSchema)),
       refusals: refusals(401, 403),
     },
+    controller.authorize.read,
     validate(listStockSchema),
     controller.listStock,
   );
@@ -129,12 +134,14 @@ export const createWarehouseRouter = (
       response: ok('Рівень запасів', stockLevelSchema),
       refusals: refusals(401, 403, 404),
     },
+    controller.authorize.read,
     validate(getStockSchema),
     controller.getStock,
   );
   routes.post(
     '/stock/receive',
     stockOperation('Оприбуткувати запас', 'Збільшує залишок на складі й записує рух типу RECEIPT.'),
+    controller.authorize.write,
     validate(receiveStockSchema),
     controller.receive,
   );
@@ -147,6 +154,7 @@ export const createWarehouseRouter = (
         'Брак залишку — 409 `INSUFFICIENT_STOCK`, брак резерву — 409 ' +
         '`INSUFFICIENT_RESERVATION`.',
     ),
+    controller.authorize.write,
     validate(issueStockSchema),
     controller.issue,
   );
@@ -158,6 +166,7 @@ export const createWarehouseRouter = (
         'зовнішнього обʼєкта, тому посилання обовʼязкове. Брак доступного залишку — ' +
         '409 `INSUFFICIENT_STOCK`.',
     ),
+    controller.authorize.write,
     validate(reserveStockSchema),
     controller.reserve,
   );
@@ -168,6 +177,7 @@ export const createWarehouseRouter = (
       'Зменшує резерв і записує рух типу RELEASE. Спроба зняти більше, ніж зарезервовано, — ' +
         '409 `INSUFFICIENT_RESERVATION`.',
     ),
+    controller.authorize.write,
     validate(releaseStockSchema),
     controller.release,
   );
@@ -180,6 +190,7 @@ export const createWarehouseRouter = (
         '(400 `STOCK_ADJUSTMENT_NOTE_REQUIRED`). Корекція в мінус нижче наявного залишку — ' +
         '409 `INSUFFICIENT_STOCK`.',
     ),
+    controller.authorize.write,
     validate(adjustStockSchema),
     controller.adjust,
   );
@@ -195,6 +206,7 @@ export const createWarehouseRouter = (
       response: ok('Сторінка рухів запасів', pageOf(stockMovementSchema)),
       refusals: refusals(401, 403),
     },
+    controller.authorize.read,
     validate(listMovementsSchema),
     controller.listMovements,
   );

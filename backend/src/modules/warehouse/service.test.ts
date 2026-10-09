@@ -2,7 +2,7 @@ import { describe, expect, it, jest } from '@jest/globals';
 
 import type { DomainEventNotification, DomainEventPublisher } from '../../common/types/index.js';
 import type { AuditService } from '../audit/service.js';
-import { createWarehouseService, type WarehouseDatabase } from './service.js';
+import { MAX_STOCK_QUANTITY, createWarehouseService, type WarehouseDatabase } from './service.js';
 import type { AdjustStockInput, WarehouseAccess } from './types.js';
 
 const access: WarehouseAccess = { actorId: 'actor-1', scope: 'ALL' };
@@ -486,5 +486,63 @@ describe('warehouse administration', () => {
       statusCode: 404,
       code: 'WAREHOUSE_NOT_FOUND',
     });
+  });
+});
+
+describe('warehouse stock range', () => {
+  it('refuses a receipt that would push the shelf past the integer column, before writing', async () => {
+    const harness = createHarness({
+      level: { ...stockLevel, quantityOnHand: 2_000_000_000, quantityReserved: 0 },
+    });
+
+    await expect(
+      harness.service.receive(access, { warehouseId, productId, quantity: 200_000_000 }),
+    ).rejects.toMatchObject({
+      statusCode: 400,
+      code: 'STOCK_QUANTITY_OUT_OF_RANGE',
+      details: { field: 'quantityOnHand', max: MAX_STOCK_QUANTITY },
+    });
+    expect(harness.updateLevel).not.toHaveBeenCalled();
+    expect(harness.createMovement).not.toHaveBeenCalled();
+  });
+
+  it('accepts a receipt that fills the shelf exactly to the limit', async () => {
+    const harness = createHarness({
+      level: { ...stockLevel, quantityOnHand: MAX_STOCK_QUANTITY - 5, quantityReserved: 0 },
+    });
+
+    await harness.service.receive(access, { warehouseId, productId, quantity: 5 });
+
+    expect(harness.updateLevel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ quantityOnHand: MAX_STOCK_QUANTITY }) as unknown,
+      }),
+    );
+  });
+});
+
+describe('warehouse search', () => {
+  it('matches the search term literally, escaping LIKE wildcards', async () => {
+    const harness = createHarness();
+    const findMany = harness.db.warehouse.findMany as unknown as jest.Mock<
+      (args: unknown) => Promise<unknown[]>
+    >;
+    findMany.mockResolvedValue([]);
+    (harness.db.warehouse.count as unknown as jest.Mock<() => Promise<number>>).mockResolvedValue(
+      0,
+    );
+
+    await harness.service.listWarehouses(access, { page: 1, pageSize: 20, search: 'A_1%' });
+
+    expect(findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          OR: [
+            { code: { contains: 'A\\_1\\%', mode: 'insensitive' } },
+            { name: { contains: 'A\\_1\\%', mode: 'insensitive' } },
+          ],
+        },
+      }),
+    );
   });
 });
