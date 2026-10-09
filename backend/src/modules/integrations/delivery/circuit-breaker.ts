@@ -27,9 +27,16 @@ import type { CircuitState } from '../types.js';
  *                 recovery is tested with one request, not with a thundering
  *                 herd.
  *
- * Only *transient* failures (network errors, timeouts, 429, 5xx) are reported as
- * failures. A 4xx answer proves the service is alive and is reported as a
- * success — a stream of bad requests from us must never trip the breaker.
+ * Only failures of the dependency (network errors, timeouts, 429, 5xx, and a
+ * refusal of our credentials) are reported as failures. Any other 4xx answer
+ * proves the service is alive and is reported as a success — a stream of bad
+ * requests from us must never trip the breaker.
+ *
+ * Every admitted call carries a permit naming the period it was admitted in.
+ * Opening the circuit starts a new period, so a call that was already in flight
+ * when the circuit opened reports into a period that is over: its result is
+ * ignored instead of closing the circuit, or extending it, behind the probe's
+ * back.
  */
 export interface CircuitBreakerOptions {
   /** Consecutive transient failures that open the circuit. */
@@ -47,11 +54,22 @@ export interface CircuitBreakerSnapshot {
   readonly openedAt: number | null;
 }
 
+/** What an admitted call reports back with. */
+export interface CircuitPermit {
+  /** The period the call was admitted in; a new one starts each time it opens. */
+  readonly generation: number;
+  /** Whether this is the single call admitted to test a half-open circuit. */
+  readonly probe: boolean;
+}
+
 export interface CircuitBreaker {
+  /** A permit when a call may proceed, `null` when it is refused. */
+  acquire(): CircuitPermit | null;
   /** True when a call may proceed; admits exactly one probe in half-open. */
   tryAcquire(): boolean;
-  onSuccess(): void;
-  onFailure(): void;
+  /** Without a permit the result is taken to belong to the current period. */
+  onSuccess(permit?: CircuitPermit): void;
+  onFailure(permit?: CircuitPermit): void;
   snapshot(): CircuitBreakerSnapshot;
 }
 
@@ -68,40 +86,52 @@ export const createCircuitBreaker = ({
   let lastErrorAt: number | null = null;
   let openedAt: number | null = null;
   let probeInFlight = false;
+  let generation = 0;
 
   const open = (): void => {
     state = 'open';
     openedAt = now();
     probeInFlight = false;
+    generation += 1;
   };
 
-  return {
-    tryAcquire() {
+  /** A result from a period that is over changes nothing. */
+  const isLate = (permit: CircuitPermit | undefined): boolean =>
+    permit !== undefined && permit.generation !== generation;
+
+  const breaker: CircuitBreaker = {
+    acquire() {
       if (state === 'open') {
-        if (openedAt === null || now() - openedAt < cooldownMs) return false;
+        if (openedAt === null || now() - openedAt < cooldownMs) return null;
         state = 'half-open';
         probeInFlight = true;
-        return true;
+        return { generation, probe: true };
       }
 
       if (state === 'half-open') {
         // A probe is already being evaluated; nobody else gets through.
-        if (probeInFlight) return false;
+        if (probeInFlight) return null;
         probeInFlight = true;
-        return true;
+        return { generation, probe: true };
       }
 
-      return true;
+      return { generation, probe: false };
     },
 
-    onSuccess() {
+    tryAcquire() {
+      return breaker.acquire() !== null;
+    },
+
+    onSuccess(permit) {
+      if (isLate(permit)) return;
       state = 'closed';
       consecutiveFailures = 0;
       openedAt = null;
       probeInFlight = false;
     },
 
-    onFailure() {
+    onFailure(permit) {
+      if (isLate(permit)) return;
       consecutiveFailures += 1;
       lastErrorAt = now();
 
@@ -118,4 +148,6 @@ export const createCircuitBreaker = ({
       return { state, consecutiveFailures, lastErrorAt, openedAt };
     },
   };
+
+  return breaker;
 };

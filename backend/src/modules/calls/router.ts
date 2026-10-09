@@ -2,6 +2,8 @@ import { Router, type RequestHandler } from 'express';
 
 import { validate } from '../../common/middleware/validate.js';
 import { describeRoutes, noContent, ok, pageOf, refusals } from '../../common/openapi/index.js';
+import { requirePermission } from '../rbac/middleware.js';
+import type { RbacService } from '../rbac/service.js';
 import type { CallsController } from './controller.js';
 import { callRecordingSchema, callSchema, callSyncResultSchema } from './types.js';
 import {
@@ -22,10 +24,21 @@ import {
 export const createCallsRouter = (
   controller: CallsController,
   authenticate: RequestHandler,
+  rbacService: RbacService,
 ): Router => {
   const router = Router();
   router.use(authenticate);
   const routes = describeRoutes(router, [{ name: 'Calls', description: 'Журнал дзвінків' }]);
+
+  // The grant is checked before the request is validated, so a caller without
+  // access is refused the same way whatever they sent. Any breadth admits the
+  // caller here; what that breadth lets them touch is the service's business.
+  const allowed = (action: 'read' | 'write' | 'delete'): RequestHandler =>
+    requirePermission(rbacService, {
+      resource: 'calls',
+      action,
+      ownerId: (request) => request.auth?.userId,
+    });
 
   routes.get(
     '/',
@@ -34,6 +47,7 @@ export const createCallsRouter = (
       response: ok('Сторінка дзвінків', pageOf(callSchema)),
       refusals: refusals(401, 403),
     },
+    allowed('read'),
     validate(listCallsSchema),
     controller.list,
   );
@@ -48,6 +62,7 @@ export const createCallsRouter = (
       response: ok('Підсумок синхронізації', callSyncResultSchema),
       refusals: refusals(401, 403, 502),
     },
+    allowed('write'),
     validate(syncCallsSchema),
     controller.sync,
   );
@@ -58,6 +73,7 @@ export const createCallsRouter = (
       response: ok('Дзвінок', callSchema),
       refusals: refusals(401, 403, 404),
     },
+    allowed('read'),
     validate(getCallSchema),
     controller.getById,
   );
@@ -69,6 +85,7 @@ export const createCallsRouter = (
       response: ok('Посилання на запис', callRecordingSchema),
       refusals: refusals(401, 403, 404),
     },
+    allowed('read'),
     validate(getCallRecordingSchema),
     controller.getRecording,
   );
@@ -82,6 +99,7 @@ export const createCallsRouter = (
       response: ok('Дзвінок оновлено', callSchema),
       refusals: refusals(401, 403, 404, 409),
     },
+    allowed('write'),
     validate(updateCallSchema),
     controller.update,
   );
@@ -92,6 +110,7 @@ export const createCallsRouter = (
       response: ok('Дзвінок прив’язано', callSchema),
       refusals: refusals(401, 403, 404, 409),
     },
+    allowed('write'),
     validate(linkCallSchema),
     controller.link,
   );
@@ -102,6 +121,7 @@ export const createCallsRouter = (
       response: noContent('Дзвінок видалено'),
       refusals: refusals(401, 403, 404, 409),
     },
+    allowed('delete'),
     validate(deleteCallSchema),
     controller.delete,
   );

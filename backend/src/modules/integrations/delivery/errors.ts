@@ -17,7 +17,11 @@ export const DELIVERY_INVALID_RESPONSE = 'DELIVERY_INVALID_RESPONSE';
 export const deliveryTimeoutError = (): AppError =>
   new AppError('The delivery service did not respond in time', 504, DELIVERY_TIMEOUT);
 
-/** Network failure, 5xx, throttling, or a circuit that is currently open. */
+/**
+ * Network failure, 5xx, throttling, a circuit that is currently open, or the
+ * carrier refusing our credentials — a misconfiguration the caller cannot fix
+ * by changing the request.
+ */
 export const deliveryUnavailableError = (): AppError =>
   new AppError('The delivery service is temporarily unavailable', 503, DELIVERY_UNAVAILABLE);
 

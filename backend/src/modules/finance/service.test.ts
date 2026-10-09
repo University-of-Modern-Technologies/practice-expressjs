@@ -128,8 +128,7 @@ interface HarnessOptions {
   readonly orders?: readonly OrderRow[];
   readonly pending?: readonly TransactionRow[];
   readonly provider?: BankProvider;
-  readonly byDirection?: readonly unknown[];
-  readonly byStatus?: readonly unknown[];
+  readonly groups?: readonly unknown[];
 }
 
 const createHarness = (options: HarnessOptions = {}) => {
@@ -171,17 +170,23 @@ const createHarness = (options: HarnessOptions = {}) => {
   const findOrders = jest.fn(async (_args: unknown) => options.orders ?? [orderRow]);
   const findTransactions = jest.fn(async (_args: unknown) => options.pending ?? [unmatchedRow]);
   const findStatements = jest.fn(async (_args: unknown) => [statementRow]);
-  const groupBy = jest.fn(async (args: unknown) => {
-    const { by } = args as { by: readonly string[] };
-    return by[0] === 'direction'
-      ? (options.byDirection ?? [
-          { direction: 'CREDIT', _count: { _all: 9 }, _sum: { amount: '11537.14' } },
-          { direction: 'DEBIT', _count: { _all: 3 }, _sum: { amount: '9240.00' } },
-        ])
-      : (options.byStatus ?? [
-          { matchStatus: 'UNMATCHED', _count: { _all: 12 }, _sum: { amount: '20777.14' } },
-        ]);
-  });
+  const groupBy = jest.fn(
+    async (_args: unknown) =>
+      options.groups ?? [
+        {
+          direction: 'CREDIT',
+          matchStatus: 'UNMATCHED',
+          _count: { _all: 9 },
+          _sum: { amount: '11537.14' },
+        },
+        {
+          direction: 'DEBIT',
+          matchStatus: 'UNMATCHED',
+          _count: { _all: 3 },
+          _sum: { amount: '9240.00' },
+        },
+      ],
+  );
 
   const transaction = {
     bankStatement: { findFirst: statementFindFirst, create: statementCreate },
@@ -666,15 +671,16 @@ describe('finance service reconciliation', () => {
         .mockImplementation(() => Promise.resolve(matchedRow)),
     });
 
+    // Both were examined, but only the row that held still was written and
+    // announced, so only that one is reported as matched; the other is picked
+    // up by the next run.
     await expect(harness.service.reconcile(access)).resolves.toEqual({
       examined: 2,
-      matched: 2,
+      matched: 1,
       suggested: 0,
       unmatched: 0,
       ignored: 0,
     });
-    // The decision stands for both, but only the row that held still was
-    // written and announced; the other is picked up by the next run.
     expect(harness.publish).toHaveBeenCalledTimes(1);
   });
 
@@ -755,7 +761,7 @@ describe('finance service summary', () => {
   });
 
   it('reports an empty period as zeroes rather than as nothing', async () => {
-    const harness = createHarness({ byDirection: [], byStatus: [] });
+    const harness = createHarness({ groups: [] });
 
     const report = await harness.service.summary(access, {
       from: '2026-01-01T00:00:00.000Z',
@@ -795,5 +801,233 @@ describe('finance service domain event fan-out', () => {
     await expect(
       harness.service.match(access, unmatchedRow.id, { version: 1, orderId: 'order-1' }),
     ).resolves.toMatchObject({ matchStatus: 'MATCHED' });
+  });
+});
+
+describe('finance service regressions', () => {
+  const repeatingProvider = (): BankProvider => {
+    const statement = buildStubStatement();
+    const [first, second] = statement.transactions;
+    if (!first || !second) throw new Error('the stub statement has at least two lines');
+    return {
+      name: 'test',
+      fetchStatement: async () => ({ ...statement, transactions: [first, first, second] }),
+    };
+  };
+
+  // A line repeated inside one document used to reach the database
+  // twice, and the second insert failed the whole statement with a 409.
+  it('files a line repeated within one statement once and skips the repeat', async () => {
+    const harness = createHarness({ provider: repeatingProvider() });
+
+    await expect(harness.service.importStatement(access)).resolves.toEqual({
+      statementId: statementRow.id,
+      imported: 2,
+      skipped: 1,
+    });
+    expect(harness.transactionCreate).toHaveBeenCalledTimes(2);
+  });
+
+  // A pull that finds everything on file changed nothing, so it is
+  // neither recorded nor announced.
+  it('records and announces nothing when a repeated import files nothing', async () => {
+    const harness = createHarness({
+      statement: statementRow,
+      storedExternalIds: stubStatement.transactions.map((row) => row.externalId),
+    });
+
+    await expect(harness.service.importStatement(access)).resolves.toEqual({
+      statementId: statementRow.id,
+      imported: 0,
+      skipped: stubStatement.transactions.length,
+    });
+    expect(harness.record).not.toHaveBeenCalled();
+    expect(harness.publish).not.toHaveBeenCalled();
+  });
+
+  // The trail and the stream carry the same document — the statement
+  // and what this pull did to it.
+  it('tells the trail and the stream the same thing about an import', async () => {
+    const harness = createHarness();
+
+    await harness.service.importStatement(access);
+
+    const recorded = harness.record.mock.calls[0]?.[1] as { changes: unknown };
+    const announced = harness.publish.mock.calls[0]?.[0];
+    expect(announced?.payload).toEqual(recorded.changes);
+    expect(recorded.changes).toEqual({
+      after: expect.objectContaining({
+        id: statementRow.id,
+        externalId: 'stub-stmt-2026-01',
+        imported: stubStatement.transactions.length,
+        skipped: 0,
+      }),
+    });
+  });
+
+  // A status the batch could not write is not reported as filed.
+  it('counts a suggestion only when it was written', async () => {
+    const harness = createHarness({
+      pending: [{ ...unmatchedRow, reference: 'Bank transfer' }],
+      orders: [
+        { ...orderRow, contact: { firstName: 'Northwind', lastName: 'Workshop', company: null } },
+        {
+          ...orderRow,
+          id: 'order-2',
+          orderNumber: 'ORD-2026-0007',
+          contact: { firstName: 'Northwind', lastName: 'Workshop', company: null },
+        },
+      ],
+      update: async () => {
+        throw { code: 'P2025' };
+      },
+    });
+
+    await expect(harness.service.reconcile(access)).resolves.toEqual({
+      examined: 1,
+      matched: 0,
+      suggested: 0,
+      unmatched: 0,
+      ignored: 0,
+    });
+  });
+
+  // The automatic match announces the same two snapshots a manual
+  // match does, not a two-field stub.
+  it('announces an automatic match with the full before and after', async () => {
+    const harness = createHarness();
+
+    await harness.service.reconcile(access);
+
+    const announced = harness.publish.mock.calls[0]?.[0];
+    expect(announced).toMatchObject({
+      eventType: 'transaction.matched',
+      entityId: unmatchedRow.id,
+    });
+    expect(announced?.payload).toEqual({
+      before: expect.objectContaining({
+        id: unmatchedRow.id,
+        matchStatus: 'UNMATCHED',
+        matchedOrderId: null,
+        amount: '1800',
+        version: 1,
+      }),
+      after: expect.objectContaining({
+        id: unmatchedRow.id,
+        matchStatus: 'MATCHED',
+        matchedOrderId: 'order-1',
+        version: 2,
+      }),
+    });
+    const recorded = harness.record.mock.calls[0]?.[1] as { changes: unknown };
+    expect(announced?.payload).toEqual(recorded.changes);
+  });
+
+  // Every searched field ignores case, identifiers included.
+  it('searches statements by label and bank id without regard to case', async () => {
+    const harness = createHarness();
+
+    await harness.service.listStatements(access, { ...statementQuery, search: 'STUB' });
+
+    expect(harness.findStatements).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          OR: [
+            { accountLabel: { contains: 'STUB', mode: 'insensitive' } },
+            { externalId: { contains: 'STUB', mode: 'insensitive' } },
+          ],
+        },
+      }),
+    );
+  });
+
+  it('searches the ledger by reference, payer and account without regard to case', async () => {
+    const harness = createHarness();
+
+    await harness.service.listTransactions(access, { ...transactionQuery, search: 'acct' });
+
+    expect(harness.findTransactions).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          OR: [
+            { reference: { contains: 'acct', mode: 'insensitive' } },
+            { counterpartyName: { contains: 'acct', mode: 'insensitive' } },
+            { counterpartyAccount: { contains: 'acct', mode: 'insensitive' } },
+          ],
+        },
+      }),
+    );
+  });
+
+  // The booking window excludes its end, like every other window.
+  it('reads the booking window as half-open', async () => {
+    const harness = createHarness();
+
+    await harness.service.listTransactions(access, {
+      ...transactionQuery,
+      bookedFrom: '2026-01-01T00:00:00.000Z',
+      bookedTo: '2026-02-01T00:00:00.000Z',
+    });
+
+    expect(harness.findTransactions).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          bookedAt: {
+            gte: new Date('2026-01-01T00:00:00.000Z'),
+            lt: new Date('2026-02-01T00:00:00.000Z'),
+          },
+        },
+      }),
+    );
+  });
+
+  // Both breakdowns come from one read of the ledger.
+  it('reads every summary figure from one grouped query', async () => {
+    const harness = createHarness();
+
+    await harness.service.summary(access, {
+      from: '2026-01-01T00:00:00.000Z',
+      to: '2026-02-01T00:00:00.000Z',
+    });
+
+    expect(harness.groupBy).toHaveBeenCalledTimes(1);
+    expect(harness.groupBy).toHaveBeenCalledWith(
+      expect.objectContaining({ by: ['direction', 'matchStatus'] }),
+    );
+  });
+
+  // A sum is not a single amount and may run past twelve digits.
+  it('totals sums wider than any single amount', async () => {
+    const harness = createHarness({
+      groups: [
+        {
+          direction: 'CREDIT',
+          matchStatus: 'MATCHED',
+          _count: { _all: 3 },
+          _sum: { amount: '2999999999999.97' },
+        },
+        {
+          direction: 'DEBIT',
+          matchStatus: 'IGNORED',
+          _count: { _all: 1 },
+          _sum: { amount: '0.5' },
+        },
+      ],
+    });
+
+    const report = await harness.service.summary(access, {
+      from: '2026-01-01T00:00:00.000Z',
+      to: '2026-02-01T00:00:00.000Z',
+    });
+
+    expect(report.inflow).toBe('2999999999999.97');
+    expect(report.outflow).toBe('0.50');
+    expect(report.net).toBe('2999999999999.47');
+    expect(report.statuses).toContainEqual({
+      status: 'MATCHED',
+      count: 3,
+      amount: '2999999999999.97',
+      share: 0.75,
+    });
   });
 });

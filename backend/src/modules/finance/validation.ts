@@ -1,6 +1,11 @@
 import { z } from 'zod';
 
-import { MAX_REPORT_WINDOW_DAYS } from '../../common/reporting/index.js';
+import {
+  DEFAULT_REPORT_WINDOW_FROM,
+  MAX_REPORT_WINDOW_DAYS,
+  defaultReportWindowTo,
+} from '../../common/reporting/index.js';
+import { parseIsoInstant } from '../analytics/validation.js';
 import {
   paymentMatchStatuses,
   statementSortFields,
@@ -9,7 +14,6 @@ import {
 } from './types.js';
 
 const idParams = z.object({ id: z.string().uuid() });
-const timestamp = z.string().datetime({ offset: true });
 const version = z.coerce.number().int().positive();
 
 /**
@@ -27,6 +31,33 @@ const money = z
  */
 export const MAX_SUMMARY_RANGE_DAYS = MAX_REPORT_WINDOW_DAYS;
 const DAY_MS = 86_400_000;
+
+/**
+ * An instant, read by the same rule as every report bound in this API: ISO
+ * 8601, a missing zone meaning UTC, and nothing `Date.parse` would guess at.
+ * The output is a UTC string, so a second parse of it is a no-op.
+ */
+const readInstant = (value: string, context: z.RefinementCtx): string => {
+  const instant = parseIsoInstant(value);
+  if (instant === null) {
+    context.addIssue({ code: 'custom', message: 'Expected an ISO 8601 date or timestamp' });
+    return z.NEVER;
+  }
+  return instant;
+};
+
+const isoInstant = z.string().min(1).transform(readInstant);
+
+/**
+ * The booking bounds of the ledger. `bookedTo` is exclusive, as the end of
+ * every window in this API is: two adjacent periods must not both claim the
+ * line booked on their shared boundary.
+ */
+const bookedFrom = z.string().transform(readInstant).meta({ format: 'date-time' });
+const bookedTo = z.string().transform(readInstant).meta({
+  format: 'date-time',
+  description: 'Виключна межа: до вибірки потрапляють транзакції, проведені раніше за неї.',
+});
 
 export const listStatementsSchema = z.object({
   query: z.object({
@@ -54,8 +85,8 @@ export const listTransactionsSchema = z.object({
       statementId: z.string().uuid().optional(),
       matchStatus: z.enum(paymentMatchStatuses).optional(),
       direction: z.enum(transactionDirections).optional(),
-      bookedFrom: timestamp.optional(),
-      bookedTo: timestamp.optional(),
+      bookedFrom: bookedFrom.optional(),
+      bookedTo: bookedTo.optional(),
       minAmount: money.optional(),
       maxAmount: money.optional(),
       sortBy: z.enum(transactionSortFields).default('bookedAt'),
@@ -101,42 +132,31 @@ export const unmatchTransactionSchema = z.object({
 /** Reconciliation takes no parameters either; it examines what is pending. */
 export const reconcileSchema = z.object({ body: z.object({}).optional() });
 
-const isoInstant = z
-  .string()
-  .trim()
-  .min(1)
-  .refine((value) => !Number.isNaN(Date.parse(value)), {
-    message: 'Expected an ISO 8601 date or timestamp',
-  })
-  .transform((value) => new Date(value).toISOString());
-
 /**
- * Both bounds stay optional here, and neither is filled in.
+ * Each bound is optional on the wire and defaults on its own, from the shared
+ * reporting window rather than from the clock: a fixed start, and the end of
+ * today.
  *
- * They used to be defaulted at this point, against the clock: `to` became
- * "now" and `from` a month before it. That made the answer to a question with
- * no parameters depend on the day it was asked — a ledger read months later
- * reported an empty period for ever. The reporting default is a shared
- * constant, so the decision stays in the service rather than the validator.
- *
- * The two checks below therefore apply only to a window the caller actually
- * named. A caller who names nothing is not making a claim to contradict.
+ * The defaults are applied *before* the two checks, exactly as the analytics
+ * reports do it. Checking only a window the caller named in full let a single
+ * bound through unexamined — `from` in 2031 with the default `to` of today is
+ * a window that runs backwards, and it used to be answered with an empty
+ * report instead of being refused.
  */
 export const financeSummarySchema = z.object({
   query: z
     .object({ from: isoInstant.optional(), to: isoInstant.optional() })
+    .transform((value) => ({
+      ...value,
+      from: value.from ?? DEFAULT_REPORT_WINDOW_FROM,
+      to: value.to ?? defaultReportWindowTo(),
+    }))
+    .refine((value) => Date.parse(value.from) < Date.parse(value.to), {
+      message: 'from must be earlier than to',
+      path: ['from'],
+    })
     .refine(
-      (value) =>
-        value.from === undefined ||
-        value.to === undefined ||
-        Date.parse(value.from) < Date.parse(value.to),
-      { message: 'from must be earlier than to', path: ['from'] },
-    )
-    .refine(
-      (value) =>
-        value.from === undefined ||
-        value.to === undefined ||
-        Date.parse(value.to) - Date.parse(value.from) <= MAX_SUMMARY_RANGE_DAYS * DAY_MS,
+      (value) => Date.parse(value.to) - Date.parse(value.from) <= MAX_SUMMARY_RANGE_DAYS * DAY_MS,
       {
         message: `The date range must not exceed ${MAX_SUMMARY_RANGE_DAYS} days`,
         path: ['from'],

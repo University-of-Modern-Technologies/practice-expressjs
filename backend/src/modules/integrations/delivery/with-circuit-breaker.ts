@@ -6,6 +6,13 @@ import type { DeliveryTransport, DeliveryTransportResponse } from './transport.j
 const isTransientStatus = (status: number): boolean => status === 429 || status >= 500;
 
 /**
+ * The carrier refusing our credentials says nothing about the parcel and
+ * everything about the integration: until somebody fixes the key, every call
+ * will fail the same way, which is exactly what the breaker is for.
+ */
+export const isCredentialRefusal = (status: number): boolean => status === 401 || status === 403;
+
+/**
  * Internal signal that the breaker refused the call before any network
  * activity happened. The retry layer catches this specifically: an open
  * circuit must fail fast, not consume another attempt or wait out a backoff.
@@ -38,7 +45,8 @@ export const withCircuitBreaker = (
 ): DeliveryTransport => ({
   kind: transport.kind,
   async send(request) {
-    if (!breaker.tryAcquire()) {
+    const permit = breaker.acquire();
+    if (!permit) {
       logger?.warn({ path: request.path }, 'Delivery call short-circuited: breaker is open');
       throw new CircuitOpenError();
     }
@@ -49,18 +57,18 @@ export const withCircuitBreaker = (
     } catch (error) {
       // A timeout or a socket error says nothing about our request and
       // everything about the dependency, so the breaker hears about it.
-      breaker.onFailure();
+      breaker.onFailure(permit);
       throw error;
     }
 
     if (response.status >= 200 && response.status < 300) {
-      breaker.onSuccess();
-    } else if (isTransientStatus(response.status)) {
-      breaker.onFailure();
+      breaker.onSuccess(permit);
+    } else if (isTransientStatus(response.status) || isCredentialRefusal(response.status)) {
+      breaker.onFailure(permit);
     } else {
-      // 4xx: the service is alive and is refusing *this* request. It must
-      // not trip the breaker.
-      breaker.onSuccess();
+      // Any other 4xx: the service is alive and is refusing *this* request.
+      // It must not trip the breaker.
+      breaker.onSuccess(permit);
     }
 
     return response;

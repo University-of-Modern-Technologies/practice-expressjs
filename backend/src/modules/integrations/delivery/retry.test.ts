@@ -134,3 +134,33 @@ describe('withRetry (delivery transport)', () => {
     expect(breaker.snapshot().state).toBe('open');
   });
 });
+
+describe('a refusal of our credentials (delivery transport)', () => {
+  const request = { method: 'GET' as const, path: '/v1/shipments/1', idempotent: true };
+
+  it.each([401, 403])(
+    'reports %i as the service being unavailable, without retrying',
+    async (code) => {
+      const transport = fakeTransport([status(code), ok()]);
+      const delay = jest.fn(() => Promise.resolve());
+      const wrapped = withRetry(transport, { delay, maxAttempts: 3 });
+
+      const failure = await wrapped.send(request).catch((error: unknown) => error);
+
+      expect(failure).toMatchObject({ statusCode: 503, code: DELIVERY_UNAVAILABLE });
+      expect(transport.calls).toBe(1);
+    },
+  );
+
+  it.each([401, 403])('counts %i against the breaker', async (code) => {
+    const breaker = createCircuitBreaker({ failureThreshold: 2 });
+    const wrapped = withRetry(withCircuitBreaker(fakeTransport([status(code)]), { breaker }), {
+      delay: () => Promise.resolve(),
+    });
+
+    await expect(codeOf(wrapped.send(request))).resolves.toBe(DELIVERY_UNAVAILABLE);
+    await expect(codeOf(wrapped.send(request))).resolves.toBe(DELIVERY_UNAVAILABLE);
+
+    expect(breaker.snapshot().state).toBe('open');
+  });
+});

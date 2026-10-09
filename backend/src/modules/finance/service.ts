@@ -1,5 +1,5 @@
 import { AppError } from '../../common/errors/index.js';
-import { fromMinorUnits, normalizeMoney, toMinorUnits } from '../../common/money/index.js';
+import { fromMinorUnits, normalizeMoney } from '../../common/money/index.js';
 import { filter } from '../../common/query/filter-builder.js';
 import { createListReader } from '../../common/query/list-reader.js';
 import {
@@ -85,6 +85,21 @@ interface CandidateOrderRecord {
     readonly lastName: string;
     readonly company: string | null;
   } | null;
+}
+
+/**
+ * What one import wrote: the counts the caller sees, and the change the trail
+ * and the stream are told about — `null` when the pull filed nothing new.
+ */
+interface StoredStatement {
+  readonly result: StatementImportResult;
+  readonly changes: { readonly after: Record<string, unknown> } | null;
+}
+
+/** A matched transaction's two snapshots, as the trail and the stream carry them. */
+interface MatchChange {
+  readonly before: BankTransactionDto;
+  readonly after: BankTransactionDto;
 }
 
 /** An order carried through the rule together with the shape the API returns. */
@@ -231,7 +246,27 @@ const toTransactionDto = (transaction: BankTransactionRecord): BankTransactionDt
   updatedAt: transaction.updatedAt,
 });
 
-const toDate = (value: string): Date => new Date(value);
+/**
+ * The booking window of a ledger page, half-open: `[bookedFrom, bookedTo)`.
+ *
+ * The shared range filter closes both ends, which is right for an amount and
+ * wrong for an instant. Every other window in this API excludes its end, so
+ * two adjacent periods never both claim the line booked on their boundary;
+ * a ledger filtered by the same two bounds as the summary has to see the same
+ * lines the summary counted.
+ */
+const bookedWithin = (
+  bookedFrom: string | undefined,
+  bookedTo: string | undefined,
+): Prisma.BankTransactionWhereInput => {
+  if (bookedFrom === undefined && bookedTo === undefined) return {};
+  return {
+    bookedAt: {
+      ...(bookedFrom !== undefined ? { gte: new Date(bookedFrom) } : {}),
+      ...(bookedTo !== undefined ? { lt: new Date(bookedTo) } : {}),
+    },
+  };
+};
 
 /**
  * Upper bound on one reconciliation run. A deployment constant rather than a
@@ -295,8 +330,26 @@ const toCount = (value: number | undefined): number => (typeof value === 'number
 const share = (part: number, whole: number): number =>
   whole <= 0 ? 0 : Math.round((part / whole) * 10_000) / 10_000;
 
-const sumOf = (value: DecimalLike | null | undefined): bigint =>
-  value === null || value === undefined ? 0n : toMinorUnits(normalizeMoney(value.toString()));
+/**
+ * A summed amount in whole minor units, of any size.
+ *
+ * Deliberately not `toMinorUnits`: that one guards what a single amount may be
+ * — twelve digits, the width of the column — and a sum over a window is not a
+ * single amount. A ledger that books a few hundred large lines in a year adds
+ * up past twelve digits, and a report that refused to total it would fail for
+ * exactly the customers with the most money in it.
+ */
+const SUMMED_AMOUNT = /^(-?)(\d+)(?:\.(\d{1,2}))?$/;
+
+const sumOf = (value: DecimalLike | null | undefined): bigint => {
+  if (value === null || value === undefined) return 0n;
+  const text = value.toString().trim();
+  const match = SUMMED_AMOUNT.exec(text);
+  if (!match) throw new Error(`Unexpected summed amount: ${text}`);
+  const [, sign, whole = '0', fraction = ''] = match;
+  const units = BigInt(whole) * 100n + BigInt(fraction.padEnd(2, '0'));
+  return sign === '-' ? -units : units;
+};
 
 export const createFinanceService = (
   db: FinanceDatabase,
@@ -373,12 +426,13 @@ export const createFinanceService = (
   const storeStatement = async (
     access: FinanceAccess,
     payload: BankProviderStatement,
-  ): Promise<StatementImportResult> =>
+  ): Promise<StoredStatement> =>
     db.$transaction(async (transaction) => {
       const existing = await transaction.bankStatement.findFirst({
         where: { externalId: payload.externalId },
         select: statementSelection,
       });
+      const created = existing === null;
       const statement =
         existing ??
         (await transaction.bankStatement.create({
@@ -395,12 +449,21 @@ export const createFinanceService = (
           select: statementSelection,
         }));
 
+      // A bank that repeats a line within one document is repeating itself:
+      // the first mention is filed and the rest are skipped. The first rather
+      // than the last, so the outcome never depends on the order of a list
+      // nobody promised to order — and a repeat is never sent to the database
+      // twice, where the second insert would fail the whole statement.
+      const unique = new Map<string, BankProviderStatement['transactions'][number]>();
+      for (const row of payload.transactions) {
+        if (!unique.has(row.externalId)) unique.set(row.externalId, row);
+      }
       const known = await transaction.bankTransaction.findMany({
-        where: { externalId: { in: payload.transactions.map((row) => row.externalId) } },
+        where: { externalId: { in: [...unique.keys()] } },
         select: { externalId: true },
       });
       const seen = new Set(known.map((row) => row.externalId));
-      const fresh = payload.transactions.filter((row) => !seen.has(row.externalId));
+      const fresh = [...unique.values()].filter((row) => !seen.has(row.externalId));
 
       for (const row of fresh) {
         await transaction.bankTransaction.create({
@@ -427,15 +490,27 @@ export const createFinanceService = (
         imported: fresh.length,
         skipped: payload.transactions.length - fresh.length,
       };
+      // A pull that found everything already on file changed nothing, and an
+      // entry claiming it did would make the trail of a quiet ledger read like
+      // a busy one. Only a new statement or a new line is recorded.
+      if (!created && fresh.length === 0) return { result, changes: null };
+
+      const changes = {
+        after: {
+          ...toStatementDto(statement),
+          imported: result.imported,
+          skipped: result.skipped,
+        },
+      };
       await audit.record(transaction, {
         actorId: access.actorId,
         action: 'statement.imported',
         entityType: 'statement',
         entityId: statement.id,
-        changes: { after: { ...toStatementDto(statement), ...result } },
+        changes,
         ...(access.ipAddress ? { ipAddress: access.ipAddress } : {}),
       });
-      return result;
+      return { result, changes };
     });
 
   /** Recomputes the suggestions for one transaction; nothing is written. */
@@ -448,16 +523,17 @@ export const createFinanceService = (
 
   /**
    * The write half of one automatic match, kept apart from the rule so the
-   * rule stays a rule. Returns false when a concurrent writer got there first,
-   * which the batch treats as "not this run" rather than as a fault.
+   * rule stays a rule. Returns the two snapshots it recorded, or null when a
+   * concurrent writer got there first, which the batch treats as "not this
+   * run" rather than as a fault.
    */
   const applyAutoMatch = async (
     access: FinanceAccess,
     transaction: BankTransactionDto,
     orderId: string,
-  ): Promise<boolean> => {
+  ): Promise<MatchChange | null> => {
     try {
-      await db.$transaction(async (tx) => {
+      return await db.$transaction(async (tx) => {
         const updated = await tx.bankTransaction.update({
           where: { id: transaction.id, version: transaction.version },
           data: {
@@ -469,20 +545,43 @@ export const createFinanceService = (
           },
           select: transactionSelection,
         });
+        const change: MatchChange = { before: transaction, after: toTransactionDto(updated) };
         await audit.record(tx, {
           actorId: access.actorId,
           action: 'transaction.matched',
           entityType: 'transaction',
           entityId: transaction.id,
-          changes: { before: transaction, after: toTransactionDto(updated) },
+          changes: change,
           ...(access.ipAddress ? { ipAddress: access.ipAddress } : {}),
         });
+        return change;
       });
-      return true;
     } catch (error) {
       // A transaction somebody edited while the batch was thinking is left
       // alone and picked up by the next run; one moving row must not abandon
       // the rest of the statement.
+      if (isRecordNotFoundError(error)) return null;
+      throw error;
+    }
+  };
+
+  /**
+   * Files a conclusion that is not a match — a new status and nothing else.
+   * Returns false when the row moved under the batch, for the same reason
+   * `applyAutoMatch` does.
+   */
+  const applyStatus = async (
+    transaction: BankTransactionDto,
+    matchStatus: PaymentMatchStatus,
+  ): Promise<boolean> => {
+    try {
+      await db.bankTransaction.update({
+        where: { id: transaction.id, version: transaction.version },
+        data: { matchStatus, version: { increment: 1 } },
+        select: { id: true },
+      });
+      return true;
+    } catch (error) {
       if (isRecordNotFoundError(error)) return false;
       throw error;
     }
@@ -490,8 +589,12 @@ export const createFinanceService = (
 
   return {
     async listStatements(_access, query) {
+      // Case-insensitive throughout, the identifier included: a person reading
+      // a bank's id off a printout types it in whatever case they like, and a
+      // search that agreed only with the exact spelling would answer "nothing"
+      // about a statement that is right there.
       const where = filter<Prisma.BankStatementWhereInput>({})
-        .search(query.search, ['accountLabel', { field: 'externalId', insensitive: false }])
+        .search(query.search, ['accountLabel', 'externalId'])
         .build();
       return readStatementPage({
         where,
@@ -505,9 +608,9 @@ export const createFinanceService = (
       // Anything the provider throws is already one of this module's errors;
       // it reaches the caller as 502 and touches nothing that is stored.
       const payload = await provider.fetchStatement();
-      let result: StatementImportResult;
+      let stored: StoredStatement;
       try {
-        result = await storeStatement(access, payload);
+        stored = await storeStatement(access, payload);
       } catch (error) {
         // The external ids already stored were read inside this transaction,
         // so a uniqueness violation can only mean a second import of the same
@@ -523,13 +626,18 @@ export const createFinanceService = (
         throw error;
       }
 
-      announce({
-        eventType: 'statement.imported',
-        entityType: 'statement',
-        entityId: result.statementId,
-        actorId: access.actorId,
-        payload: { after: result },
-      });
+      const { result, changes } = stored;
+      // The stream hears exactly what the trail recorded, and nothing when
+      // the trail recorded nothing.
+      if (changes !== null) {
+        announce({
+          eventType: 'statement.imported',
+          entityType: 'statement',
+          entityId: result.statementId,
+          actorId: access.actorId,
+          payload: changes,
+        });
+      }
 
       return result;
     },
@@ -539,12 +647,11 @@ export const createFinanceService = (
         .equals('statementId', query.statementId)
         .equals('matchStatus', query.matchStatus)
         .equals('direction', query.direction)
-        .search(query.search, [
-          'reference',
-          'counterpartyName',
-          { field: 'counterpartyAccount', insensitive: false },
-        ])
-        .range('bookedAt', query.bookedFrom, query.bookedTo, toDate)
+        // What the payer wrote, who they said they were and the account they
+        // paid from — the three things a ledger is searched by when hunting a
+        // payment, all without regard to case.
+        .search(query.search, ['reference', 'counterpartyName', 'counterpartyAccount'])
+        .extend(bookedWithin(query.bookedFrom, query.bookedTo))
         .range('amount', query.minAmount, query.maxAmount)
         .build();
       return readTransactionPage({
@@ -719,39 +826,39 @@ export const createFinanceService = (
         MATCHED: 0,
         IGNORED: 0,
       };
-      const matched: string[] = [];
+      const matched: MatchChange[] = [];
 
+      // The tally counts what was filed, not what was concluded. A row that a
+      // person moved while the batch was thinking keeps whatever they made of
+      // it, so it is examined but lands in none of the four outcomes: a
+      // report saying "matched: 2" over one write would be claiming a
+      // settlement the ledger does not hold.
       for (const transaction of transactions) {
         const outcome = isReconcilableDirection(transaction.direction)
           ? matchOutcomeFor(findMatchCandidates(transaction, orders))
           : ({ matchStatus: 'IGNORED', matchedOrderId: null } as const);
-        tally[outcome.matchStatus] += 1;
         if (outcome.matchStatus === 'MATCHED' && outcome.matchedOrderId !== null) {
-          const applied = await applyAutoMatch(access, transaction, outcome.matchedOrderId);
-          if (applied) matched.push(transaction.id);
+          const change = await applyAutoMatch(access, transaction, outcome.matchedOrderId);
+          if (change === null) continue;
+          matched.push(change);
+          tally.MATCHED += 1;
           continue;
         }
-        if (transaction.matchStatus !== outcome.matchStatus) {
-          await db.bankTransaction
-            .update({
-              where: { id: transaction.id, version: transaction.version },
-              data: { matchStatus: outcome.matchStatus, version: { increment: 1 } },
-              select: { id: true },
-            })
-            .catch((error: unknown) => {
-              if (isRecordNotFoundError(error)) return null;
-              throw error;
-            });
-        }
+        const filed =
+          transaction.matchStatus === outcome.matchStatus ||
+          (await applyStatus(transaction, outcome.matchStatus));
+        if (filed) tally[outcome.matchStatus] += 1;
       }
 
-      for (const id of matched) {
+      // The same two snapshots a manual match announces, so a consumer of the
+      // stream cannot tell — and need not care — which of the two decided.
+      for (const change of matched) {
         announce({
           eventType: 'transaction.matched',
           entityType: 'transaction',
-          entityId: id,
+          entityId: change.after.id,
           actorId: access.actorId,
-          payload: { after: { id, matchStatus: 'MATCHED' } },
+          payload: change,
         });
       }
 
@@ -769,38 +876,31 @@ export const createFinanceService = (
       const where: Prisma.BankTransactionWhereInput = {
         bookedAt: { gte: new Date(window.from), lt: new Date(window.to) },
       };
-      const [byDirection, byStatus] = await Promise.all([
-        db.bankTransaction.groupBy({
-          by: ['direction'],
-          where,
-          _count: { _all: true },
-          _sum: { amount: true },
-        }),
-        db.bankTransaction.groupBy({
-          by: ['matchStatus'],
-          where,
-          _count: { _all: true },
-          _sum: { amount: true },
-        }),
-      ]);
+      // One grouped query rather than one per figure: the same rows answer
+      // every number below, and two reads — even issued together — can each
+      // see a different moment of a ledger that an import is writing to, so
+      // the totals by direction and the totals by state would stop adding up.
+      const groups = await db.bankTransaction.groupBy({
+        by: ['direction', 'matchStatus'],
+        where,
+        _count: { _all: true },
+        _sum: { amount: true },
+      });
 
-      const inflow = byDirection
-        .filter((group) => group.direction === 'CREDIT')
-        .reduce((total, group) => total + sumOf(group._sum.amount), 0n);
-      const outflow = byDirection
-        .filter((group) => group.direction === 'DEBIT')
-        .reduce((total, group) => total + sumOf(group._sum.amount), 0n);
-      const transactionCount = byDirection.reduce(
-        (total, group) => total + toCount(group._count._all),
-        0,
-      );
-
-      const counted = new Map(
-        byStatus.map((group) => [
-          group.matchStatus as PaymentMatchStatus,
-          { count: toCount(group._count._all), amount: sumOf(group._sum.amount) },
-        ]),
-      );
+      let inflow = 0n;
+      let outflow = 0n;
+      let transactionCount = 0;
+      const counted = new Map<PaymentMatchStatus, { count: number; amount: bigint }>();
+      for (const group of groups) {
+        const count = toCount(group._count._all);
+        const amount = sumOf(group._sum.amount);
+        if (group.direction === 'CREDIT') inflow += amount;
+        else outflow += amount;
+        transactionCount += count;
+        const status = group.matchStatus as PaymentMatchStatus;
+        const entry = counted.get(status) ?? { count: 0, amount: 0n };
+        counted.set(status, { count: entry.count + count, amount: entry.amount + amount });
+      }
       // Every status is reported, including the ones with nothing in them: a
       // client rendering shares must not have to guess whether a missing
       // bucket is zero or unknown.

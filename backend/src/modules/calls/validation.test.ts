@@ -119,3 +119,25 @@ describe('call mutation validation', () => {
     expect(deleteCallSchema.safeParse({ params: { id }, query: {} }).success).toBe(false);
   });
 });
+
+describe('call numbers and bounds', () => {
+  const callId = '5ff875e1-4c1d-4e45-9c8a-fceb5fb5d836';
+
+  it.each([null, '', '3', true, false])('refuses %p as a body version', (value) => {
+    expect(
+      updateCallSchema.safeParse({ params: { id: callId }, body: { version: value, notes: 'x' } })
+        .success,
+    ).toBe(false);
+  });
+
+  it('still reads the delete version from the query string', () => {
+    expect(
+      deleteCallSchema.safeParse({ params: { id: callId }, query: { version: '3' } }).success,
+    ).toBe(true);
+  });
+
+  it('puts an upper bound on the page number and refuses a blank search', () => {
+    expect(listCallsSchema.safeParse({ query: { page: '1000001' } }).success).toBe(false);
+    expect(listCallsSchema.safeParse({ query: { search: '   ' } }).success).toBe(false);
+  });
+});

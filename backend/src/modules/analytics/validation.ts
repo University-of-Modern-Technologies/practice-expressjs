@@ -23,18 +23,74 @@ export const MAX_STOCK_THRESHOLD = 1_000_000;
 export const DEFAULT_STOCK_THRESHOLD = 5;
 
 /**
+ * The one spelling of an instant both backends accept: a calendar date, then
+ * optionally a time, then optionally `Z` or a `±HH:MM` offset. Deliberately
+ * narrower than `Date.parse`, which also takes `"1"`, a space instead of `T`,
+ * local-time readings and English month names — every one of them a reading
+ * the sibling backend would have to reproduce, and does not.
+ */
+const ISO_INSTANT =
+  /^([1-9]\d{3})-(\d{2})-(\d{2})(?:T([01]\d|2[0-3]):([0-5]\d)(?::([0-5]\d)(?:\.(\d{1,9}))?)?(Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)?)?$/;
+
+const MINUTE_MS = 60_000;
+const EARLIEST_YEAR = 1000;
+const LATEST_YEAR = 9999;
+
+/**
+ * Reads a bound as an instant, or returns null when it is not one.
+ *
+ * A value without a zone is UTC — not the zone of whichever machine this
+ * process runs on, which is what `Date.parse` would make of a date-time.
+ * The calendar is checked rather than trusted: `2026-02-31` is refused instead
+ * of rolling over into March. Anything finer than a millisecond is truncated,
+ * because that is the resolution the data is stored at.
+ */
+export const parseIsoInstant = (value: string): string | null => {
+  const match = ISO_INSTANT.exec(value);
+  if (!match) return null;
+  const [, year, month, day, hour, minute, second, fraction, zone] = match;
+  const calendarYear = Number(year);
+  const monthIndex = Number(month) - 1;
+  const dayOfMonth = Number(day);
+
+  const midnight = new Date(Date.UTC(calendarYear, monthIndex, dayOfMonth));
+  if (midnight.getUTCMonth() !== monthIndex || midnight.getUTCDate() !== dayOfMonth) return null;
+
+  const wallClock = Date.UTC(
+    calendarYear,
+    monthIndex,
+    dayOfMonth,
+    Number(hour ?? 0),
+    Number(minute ?? 0),
+    Number(second ?? 0),
+    Number((fraction ?? '').slice(0, 3).padEnd(3, '0')),
+  );
+  const offsetMinutes =
+    zone === undefined || zone === 'Z'
+      ? 0
+      : (zone.startsWith('-') ? -1 : 1) * (Number(zone.slice(1, 3)) * 60 + Number(zone.slice(4)));
+  const instant = new Date(wallClock - offsetMinutes * MINUTE_MS);
+  const utcYear = instant.getUTCFullYear();
+  if (utcYear < EARLIEST_YEAR || utcYear > LATEST_YEAR) return null;
+  return instant.toISOString();
+};
+
+/**
  * Dates are normalised to ISO 8601 UTC strings rather than `Date` objects so
  * that parsing the output again is a no-op: the router validates a request and
  * the controller validates it once more, and both must agree.
  */
 const isoInstant = z
   .string()
-  .trim()
   .min(1)
-  .refine((value) => !Number.isNaN(Date.parse(value)), {
-    message: 'Expected an ISO 8601 date or timestamp',
+  .transform((value, context) => {
+    const instant = parseIsoInstant(value);
+    if (instant === null) {
+      context.addIssue({ code: 'custom', message: 'Expected an ISO 8601 date or timestamp' });
+      return z.NEVER;
+    }
+    return instant;
   })
-  .transform((value) => new Date(value).toISOString())
   .meta({ description: 'Дата або мітка часу ISO 8601; нормалізується до UTC.' });
 
 interface RangeInput {

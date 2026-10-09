@@ -9,7 +9,7 @@ import {
 import type { Prisma, PrismaDatabase, PrismaTransaction } from '../../db/prisma.js';
 import type { AuditService } from '../audit/service.js';
 import { DEFAULT_CALL_SYNC_BATCH_SIZE } from './provider-factory.js';
-import type { CallProvider, CallProviderRecord } from './provider.js';
+import { MAX_PROVIDER_BATCH_SIZE, type CallProvider, type CallProviderRecord } from './provider.js';
 import type {
   CallAccess,
   CallDto,
@@ -25,7 +25,7 @@ interface CallRecord extends CallDto {
   readonly deletedAt: Date | null;
 }
 
-type CallsTransaction = Pick<PrismaTransaction, 'auditLog' | 'call' | 'contact' | 'deal'>;
+type CallsTransaction = Pick<PrismaTransaction, 'auditLog' | 'call' | 'contact' | 'deal' | 'user'>;
 export type CallsDatabase = Pick<PrismaDatabase, '$transaction' | 'call'>;
 
 export interface CallsService {
@@ -130,6 +130,32 @@ const assertContactAccess = async (
   if (!contact) throw new AppError('Contact not found', 404, 'CALL_CONTACT_NOT_FOUND');
 };
 
+/**
+ * An owner is a colleague who can still sign in. Naming anybody else is the
+ * caller's mistake about a person, reported as such, rather than a foreign key
+ * failing somewhere below. `null` hands the call back to nobody and needs no
+ * lookup.
+ */
+const assertOwnerExists = async (
+  transaction: CallsTransaction,
+  ownerId: string | null | undefined,
+): Promise<void> => {
+  if (!ownerId) return;
+  const owner = await transaction.user.findFirst({
+    where: { id: ownerId, isActive: true },
+    select: { id: true },
+  });
+  if (!owner) throw new AppError('Owner not found', 404, 'CALL_OWNER_NOT_FOUND');
+};
+
+/**
+ * A search term is matched literally. The filter becomes `LIKE`, where `%` and
+ * `_` are wildcards, so a caller searching for "100%" would otherwise match
+ * every row that merely contains "100".
+ */
+const literalSearch = (term: string | undefined): string | undefined =>
+  term?.replace(/[\\%_]/g, '\\$&');
+
 const assertDealAccess = async (
   transaction: CallsTransaction,
   access: CallAccess,
@@ -148,7 +174,10 @@ const assertDealAccess = async (
 };
 
 export interface CallsServiceOptions {
-  /** Upper bound on how many records one sync run may take. */
+  /**
+   * Upper bound on how many records one sync run may take. Never above what
+   * a provider is allowed to answer with in one batch.
+   */
   readonly syncBatchSize?: number | undefined;
   /** Injectable clock keeps recording expiry deterministic in tests. */
   readonly now?: (() => number) | undefined;
@@ -178,6 +207,7 @@ export const createCallsService = (
   };
 
   const readPage = createListReader({ model: db.call, select: callSelection, toDto });
+  const batchLimit = Math.min(syncBatchSize, MAX_PROVIDER_BATCH_SIZE);
 
   /**
    * Imports one fetched record, or reports that it was already known.
@@ -246,16 +276,19 @@ export const createCallsService = (
         .equals('disposition', query.disposition)
         // Numbers are matched literally: a phone number has no case, and an
         // insensitive comparison would only cost an index lookup.
-        .search(query.search, [
+        .search(literalSearch(query.search), [
           { field: 'fromNumber', insensitive: false },
           { field: 'toNumber', insensitive: false },
           'notes',
         ])
         .range('startedAt', query.startedFrom, query.startedTo, toDate)
+        // Its own conjunct rather than a second `contactId` key: combined with
+        // a `contactId` filter both must hold, instead of one replacing the
+        // other.
         .extend(
           query.hasContact === undefined
             ? {}
-            : { contactId: query.hasContact ? { not: null } : null },
+            : { AND: [{ contactId: query.hasContact ? { not: null } : null }] },
         )
         .build();
       return readPage({
@@ -273,7 +306,7 @@ export const createCallsService = (
     async sync(access) {
       // Anything the provider throws is already one of this module's errors;
       // it reaches the caller as 502 and touches nothing that is stored.
-      const fetched = await provider.fetchCalls({ limit: syncBatchSize });
+      const fetched = await provider.fetchCalls({ limit: batchLimit });
 
       const created: CallDto[] = [];
       let skipped = 0;
@@ -302,6 +335,7 @@ export const createCallsService = (
         assertCurrentVersion(existing.version, data.version);
         const ownerId = data.ownerId === undefined ? existing.ownerId : data.ownerId;
         ensureOwnerAccess(access, ownerId);
+        await assertOwnerExists(transaction, data.ownerId);
         await assertContactAccess(transaction, access, data.contactId);
         await assertDealAccess(transaction, access, data.dealId);
         const updateData: Prisma.CallUncheckedUpdateInput = {
@@ -408,7 +442,8 @@ export const createCallsService = (
       const call = await findActive(db.call, access, id);
       // Most calls have no recording — an unanswered one never had anything to
       // record — so the absence is an ordinary answer, not a fault.
-      if (call.recordingUrl === null) {
+      // An empty link is as good as none: there is nothing a player could open.
+      if (!call.recordingUrl) {
         throw new AppError('This call has no recording', 404, 'CALL_RECORDING_UNAVAILABLE');
       }
       return {

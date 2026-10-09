@@ -90,6 +90,14 @@ const toIsoString = (value: Date | string): string =>
 
 const toCount = (value: number | bigint | null | undefined): number => Number(value ?? 0);
 
+/** Orders two identifiers by their text, the way PostgreSQL orders a `uuid`. */
+const compareIdentifiers = (left: string, right: string): number => {
+  const a = left.toLowerCase();
+  const b = right.toLowerCase();
+  if (a === b) return 0;
+  return a < b ? -1 : 1;
+};
+
 // A draft order has no `placedAt` yet, so it is dated by `createdAt` instead.
 const orderDateFilter = (from: Date, to: Date): Prisma.OrderWhereInput => ({
   OR: [{ placedAt: { gte: from, lt: to } }, { placedAt: null, createdAt: { gte: from, lt: to } }],
@@ -140,8 +148,18 @@ export const createAnalyticsService = (
           ? Prisma.sql`AND o.owner_id = ${query.ownerId}::uuid`
           : Prisma.empty;
 
+        // Buckets are cut on the UTC calendar, named explicitly. Truncating a
+        // timestamptz on its own uses the session's time zone, so the same
+        // orders would fall into different days depending on how the
+        // connection happened to be configured. Converting to UTC wall time,
+        // truncating, and converting back pins every bucket to a UTC midnight.
+        //
+        // The first bucket starts where its calendar unit starts, which may
+        // be before `from` (a week asked for from a Wednesday starts on the
+        // Monday). Its figures still cover only the window: the bounds below
+        // filter the orders, the truncation only labels them.
         const rows = await db.$queryRaw<SalesSummaryRow[]>(Prisma.sql`
-          SELECT date_trunc(${query.period}::text, COALESCE(o.placed_at, o.created_at)) AS bucket_start,
+          SELECT date_trunc(${query.period}::text, COALESCE(o.placed_at, o.created_at) AT TIME ZONE 'UTC') AT TIME ZONE 'UTC' AS bucket_start,
                  COUNT(*)::int AS order_count,
                  COALESCE(SUM(o.total), 0)::text AS revenue
           FROM orders o
@@ -257,7 +275,11 @@ export const createAnalyticsService = (
             },
           },
           _sum: { quantity: true, lineTotal: true },
-          orderBy: { _sum: { lineTotal: 'desc' } },
+          // Equal revenue is broken by the product id, in the query itself:
+          // the cut to `limit` happens there, and without a total order two
+          // products tied at the edge would trade places from one run to the
+          // next.
+          orderBy: [{ _sum: { lineTotal: 'desc' } }, { productId: 'asc' }],
           take: query.limit,
         });
 
@@ -367,7 +389,14 @@ export const createAnalyticsService = (
               orderRevenue: formatDecimal(orders?._sum.total),
             };
           })
-          .sort((left, right) => compareDecimals(right.orderRevenue, left.orderRevenue))
+          // Equal revenue is broken by the owner id, so the ranking — and the
+          // cut to `limit` — does not depend on the order the groups came back
+          // in. The id rather than the name: names repeat and may be absent.
+          .sort(
+            (left, right) =>
+              compareDecimals(right.orderRevenue, left.orderRevenue) ||
+              compareIdentifiers(left.ownerId, right.ownerId),
+          )
           .slice(0, query.limit);
 
         return { from: query.from, to: query.to, items } satisfies OwnerPerformanceReport;
@@ -387,6 +416,9 @@ export const createAnalyticsService = (
           : Prisma.empty;
 
         // Threshold and limit are bound parameters, never interpolated text.
+        // Only active products in active warehouses are reported: a closed
+        // warehouse sells nothing, so its shelves are not a shortage anybody
+        // can act on.
         const rows = await db.$queryRaw<StockHealthQueryRow[]>(Prisma.sql`
           SELECT p.id AS product_id,
                  p.sku AS sku,
@@ -401,6 +433,7 @@ export const createAnalyticsService = (
           JOIN warehouses w ON w.id = sl.warehouse_id
           WHERE p.deleted_at IS NULL
             AND p.is_active = TRUE
+            AND w.is_active = TRUE
             AND (sl.quantity_on_hand - sl.quantity_reserved) <= ${query.threshold}
             ${warehouseFilter}
           ORDER BY quantity_available ASC, p.sku ASC

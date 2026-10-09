@@ -9,6 +9,7 @@ import {
   candidatePlacementWindow,
   counterpartyMatchesContact,
   findMatchCandidates,
+  foldForMatching,
   isMatchCandidate,
   matchOutcomeFor,
   referenceMentionsOrder,
@@ -165,5 +166,31 @@ describe('candidate creation window', () => {
 
   it('has nothing to span when there is nothing to reconcile', () => {
     expect(candidatePlacementWindow([])).toBeNull();
+  });
+});
+
+describe('text folding for the reconciliation rule', () => {
+  const char = (code: number): string => String.fromCharCode(code);
+
+  // The sibling backend folds by the same explicit list, so a payer's
+  // text compares the same whichever backend runs the rule.
+  it('drops case and exactly the listed whitespace, nothing else', () => {
+    const noBreak = char(0xa0);
+    const ideographic = char(0x3000);
+    const byteOrderMark = char(0xfeff);
+    expect(foldForMatching(`  ORD${noBreak}2026\t${ideographic}0001${byteOrderMark} `)).toBe(
+      'ord20260001',
+    );
+    // An information separator is not whitespace to this rule, even though
+    // some languages count it as such.
+    expect(foldForMatching(`ORD${char(0x1c)}1`)).toBe(`ord${char(0x1c)}1`);
+    expect(foldForMatching('ORD-2026-0001')).toBe('ord-2026-0001');
+  });
+
+  // Every string contains the empty one, so a blank order number used
+  // to be "quoted" by every payment.
+  it('never reads a blank order number into a reference', () => {
+    expect(referenceMentionsOrder('Payment for order ORD-2026-0001', '')).toBe(false);
+    expect(referenceMentionsOrder('Payment for order ORD-2026-0001', '   ')).toBe(false);
   });
 });

@@ -38,4 +38,32 @@ describe('renderCsv', () => {
     const withNull: readonly ErasedExportColumn[] = [{ key: 'value', get: () => null }];
     expect(renderCsv(withNull, [{}])).toBe('value\r\n\r\n');
   });
+
+  // A cell a spreadsheet would evaluate is made literal.
+  it('neutralises a cell that would be read as a formula', () => {
+    const csv = renderCsv(columns, [
+      { name: '=HYPERLINK("http://x","y")', amount: '1.00' },
+      { name: '+1+1', amount: '2.00' },
+      { name: '@SUM(A1)', amount: '3.00' },
+      { name: '-cmd', amount: '4.00' },
+      { name: '\tTab', amount: '5.00' },
+      { name: '\rReturn', amount: '6.00' },
+    ]);
+
+    expect(csv).toBe(
+      'name,amount\r\n' +
+        '"\'=HYPERLINK(""http://x"",""y"")",1.00\r\n' +
+        "'+1+1,2.00\r\n" +
+        "'@SUM(A1),3.00\r\n" +
+        "'-cmd,4.00\r\n" +
+        "'\tTab,5.00\r\n" +
+        '"\'\rReturn",6.00\r\n',
+    );
+  });
+
+  it('leaves a negative number a number', () => {
+    expect(renderCsv(columns, [{ name: '-12', amount: '-0.50' }])).toBe(
+      'name,amount\r\n-12,-0.50\r\n',
+    );
+  });
 });

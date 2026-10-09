@@ -67,6 +67,13 @@ export interface TransitionTicketData {
   readonly note?: string | undefined;
 }
 
+/**
+ * Highest page a list request may ask for: far beyond any real queue, and low
+ * enough that the row offset it implies stays a small integer for the database
+ * instead of making the query itself fail.
+ */
+export const MAX_HELPDESK_PAGE = 1_000_000;
+
 export const ticketSortFields = [
   'createdAt',
   'updatedAt',

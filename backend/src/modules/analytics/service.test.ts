@@ -434,3 +434,54 @@ describe('analytics stock health', () => {
     expect(sql.values).toContain(warehouseId);
   });
 });
+
+describe('analytics regressions', () => {
+  // Buckets are cut on the UTC calendar whatever the session's zone.
+  it('truncates the sales buckets in UTC, named explicitly', async () => {
+    const harness = createHarness();
+    const service = createAnalyticsService(harness.db, createRecordingCache());
+
+    await service.salesSummary({ ...range, period: 'day' });
+
+    const text = lastSql(harness.queryRaw).strings.join('');
+    expect(text).toContain(
+      "COALESCE(o.placed_at, o.created_at) AT TIME ZONE 'UTC') AT TIME ZONE 'UTC' AS bucket_start",
+    );
+  });
+
+  // Equal revenue at the cut is broken by the product id in the query.
+  it('breaks a revenue tie in the top products by the product id', async () => {
+    const harness = createHarness();
+    const service = createAnalyticsService(harness.db, createRecordingCache());
+
+    await service.topProducts({ ...range, limit: 3 });
+
+    const args = harness.orderItemGroupBy.mock.calls[0]?.[0] as { orderBy: unknown };
+    expect(args.orderBy).toEqual([{ _sum: { lineTotal: 'desc' } }, { productId: 'asc' }]);
+  });
+
+  // Owners with equal revenue are ranked by id, not by arrival order.
+  it('breaks a revenue tie between owners by the owner id', async () => {
+    const harness = createHarness();
+    harness.orderGroupBy.mockImplementation(async () => [
+      { ownerId: 'u3', _count: { _all: 1 }, _sum: { total: decimal('100') } },
+      { ownerId: 'u1', _count: { _all: 1 }, _sum: { total: decimal('100') } },
+      { ownerId: 'u2', _count: { _all: 1 }, _sum: { total: decimal('250') } },
+    ]);
+    const service = createAnalyticsService(harness.db, createRecordingCache());
+
+    const report = await service.ownerPerformance({ ...range, limit: 2 });
+
+    expect(report.items.map((row) => row.ownerId)).toEqual(['u2', 'u1']);
+  });
+
+  // A closed warehouse is not a shortage anybody can act on.
+  it('reports stock only in active warehouses', async () => {
+    const harness = createHarness();
+    const service = createAnalyticsService(harness.db, createRecordingCache());
+
+    await service.stockHealth({ threshold: 5, limit: 20 });
+
+    expect(lastSql(harness.queryRaw).strings.join('')).toContain('w.is_active = TRUE');
+  });
+});

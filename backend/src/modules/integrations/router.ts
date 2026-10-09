@@ -2,6 +2,8 @@ import { Router, type RequestHandler } from 'express';
 
 import { validate } from '../../common/middleware/validate.js';
 import { created, describeRoutes, ok, refusals } from '../../common/openapi/index.js';
+import { requirePermission } from '../rbac/middleware.js';
+import type { RbacService } from '../rbac/service.js';
 import type { IntegrationsController } from './controller.js';
 import { deliveryHealthSchema, deliveryQuoteSchema, shipmentSchema } from './types.js';
 import { createQuoteSchema, createShipmentSchema, getShipmentSchema } from './validation.js';
@@ -13,6 +15,7 @@ const upstreamErrorNote =
 export const createIntegrationsRouter = (
   controller: IntegrationsController,
   authenticate: RequestHandler,
+  rbacService: RbacService,
 ): Router => {
   const router = Router();
   router.use(authenticate);
@@ -20,6 +23,16 @@ export const createIntegrationsRouter = (
     { name: 'Integrations', description: 'Стан зовнішніх інтеграцій' },
     { name: 'Delivery', description: 'Доставка: тарифи та відправлення' },
   ]);
+
+  // The grant is checked before the request is validated, so a caller without
+  // access is refused the same way whatever they sent. Any breadth admits the
+  // caller here; what that breadth lets them touch is the service's business.
+  const allowed = (action: 'read' | 'write'): RequestHandler =>
+    requirePermission(rbacService, {
+      resource: 'integrations',
+      action,
+      ownerId: (request) => request.auth?.userId,
+    });
 
   routes.get(
     '/health',
@@ -43,6 +56,7 @@ export const createIntegrationsRouter = (
       // Every call to the carrier can fail in one of four documented ways.
       refusals: refusals(401, 403, 422, 502, 503, 504),
     },
+    allowed('read'),
     validate(createQuoteSchema),
     controller.createQuote,
   );
@@ -55,6 +69,7 @@ export const createIntegrationsRouter = (
       response: created('Відправлення створено', shipmentSchema),
       refusals: refusals(401, 403, 422, 502, 503, 504),
     },
+    allowed('write'),
     validate(createShipmentSchema),
     controller.createShipment,
   );
@@ -69,6 +84,7 @@ export const createIntegrationsRouter = (
       response: ok('Відправлення', shipmentSchema),
       refusals: refusals(401, 403, 404, 422, 502, 503, 504),
     },
+    allowed('read'),
     validate(getShipmentSchema),
     controller.getShipment,
   );

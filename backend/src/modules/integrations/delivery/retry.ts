@@ -1,6 +1,6 @@
 import type { Logger } from 'pino';
 
-import { CircuitOpenError } from './with-circuit-breaker.js';
+import { CircuitOpenError, isCredentialRefusal } from './with-circuit-breaker.js';
 import { deliveryRejectedError, deliveryTimeoutError, deliveryUnavailableError } from './errors.js';
 import type { DeliveryTransport, DeliveryTransportResponse } from './transport.js';
 
@@ -132,6 +132,17 @@ export const withRetry = (
           if (attempt === attempts) throw lastFailure;
           await waitBefore(attempt, response);
           continue;
+        }
+
+        // Our credentials were refused: the integration is misconfigured, which
+        // the caller experiences as the service being unavailable. Repeating the
+        // request with the same key would only be refused again.
+        if (isCredentialRefusal(response.status)) {
+          logger?.error(
+            { path: request.path, status: response.status },
+            'Delivery service refused our credentials',
+          );
+          throw deliveryUnavailableError();
         }
 
         // 4xx: the service is alive and is refusing *this* request. Retrying

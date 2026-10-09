@@ -2,7 +2,12 @@ import { describe, expect, it, jest } from '@jest/globals';
 
 import { AppError } from '../../common/errors/index.js';
 import { callProviderUnavailableError, type CallProvider } from './provider.js';
-import { RetryableCallProviderFailure, withRetry } from './retry-provider.js';
+import {
+  MAX_RETRY_BACKOFF_MS,
+  MAX_RETRY_TOTAL_MS,
+  RetryableCallProviderFailure,
+  withRetry,
+} from './retry-provider.js';
 
 const request = { limit: 10 };
 
@@ -63,5 +68,46 @@ describe('call provider retries', () => {
 
     await expect(provider.fetchCalls(request)).rejects.toBeInstanceOf(AppError);
     expect(fetchCalls).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('call provider retry budget', () => {
+  const failing = () =>
+    jest
+      .fn<CallProvider['fetchCalls']>()
+      .mockRejectedValue(new RetryableCallProviderFailure(callProviderUnavailableError()));
+
+  it('caps a single pause however large the base', async () => {
+    const delay = jest.fn(async (_ms: number) => undefined);
+    const provider = withRetry(providerThat(failing()), {
+      maxAttempts: 4,
+      backoffMs: 4_000,
+      delay,
+      now: () => 0,
+    });
+
+    await expect(provider.fetchCalls(request)).rejects.toBeInstanceOf(AppError);
+    expect(delay.mock.calls.map(([ms]) => ms)).toEqual([
+      4_000,
+      MAX_RETRY_BACKOFF_MS,
+      MAX_RETRY_BACKOFF_MS,
+    ]);
+  });
+
+  it('stops retrying once the total budget is spent', async () => {
+    let clock = 0;
+    const fetchCalls = failing();
+    const provider = withRetry(providerThat(fetchCalls), {
+      maxAttempts: 10,
+      backoffMs: 5_000,
+      delay: async (ms) => {
+        clock += ms;
+      },
+      now: () => clock,
+    });
+
+    await expect(provider.fetchCalls(request)).rejects.toBeInstanceOf(AppError);
+    expect(clock).toBeLessThanOrEqual(MAX_RETRY_TOTAL_MS);
+    expect(fetchCalls.mock.calls.length).toBeLessThan(10);
   });
 });

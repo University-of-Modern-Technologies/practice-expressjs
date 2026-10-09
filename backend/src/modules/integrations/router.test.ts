@@ -1,7 +1,8 @@
 import { describe, expect, it, jest } from '@jest/globals';
-import express, { type RequestHandler } from 'express';
+import express, { type ErrorRequestHandler, type RequestHandler } from 'express';
 import request from 'supertest';
 
+import type { RbacService } from '../rbac/service.js';
 import type { IntegrationsController } from './controller.js';
 import { createIntegrationsRouter } from './router.js';
 
@@ -16,11 +17,19 @@ const controller = {
   health: jest.fn(noContent),
 } as IntegrationsController;
 
-const authenticate: RequestHandler = (_request, _response, next) => next();
+const authenticate: RequestHandler = (req, _response, next) => {
+  req.auth = { userId: 'user-1' } as NonNullable<typeof req.auth>;
+  next();
+};
+
+/** Holds every grant: what these tests check is routing, not permissions. */
+const rbac = {
+  getPermissionScope: jest.fn(async () => 'ALL' as const),
+} as unknown as RbacService;
 
 const app = express()
   .use(express.json())
-  .use('/integrations', createIntegrationsRouter(controller, authenticate));
+  .use('/integrations', createIntegrationsRouter(controller, authenticate, rbac));
 
 const quoteBody = {
   orderId: 'ord_1',
@@ -53,7 +62,7 @@ describe('integrations router', () => {
   it('rejects a malformed quote request before it reaches the controller', async () => {
     const withHandler = express()
       .use(express.json())
-      .use('/integrations', createIntegrationsRouter(controller, authenticate))
+      .use('/integrations', createIntegrationsRouter(controller, authenticate, rbac))
       .use(((error: unknown, _request, response, _next) => {
         response.status(400).json({ code: (error as { code?: string }).code });
       }) as express.ErrorRequestHandler);
@@ -65,5 +74,29 @@ describe('integrations router', () => {
 
     expect(response.body).toEqual({ code: 'VALIDATION_ERROR' });
     expect(controller.createQuote).not.toHaveBeenCalled();
+  });
+});
+
+describe('integrations router permissions', () => {
+  const refuse: ErrorRequestHandler = (
+    error: { statusCode?: number; code?: string },
+    _req,
+    res,
+    _next,
+  ) => {
+    res.status(error.statusCode ?? 500).json({ code: error.code });
+  };
+
+  it('refuses a caller without the grant before validating what they sent', async () => {
+    const denied = { getPermissionScope: jest.fn(async () => null) } as unknown as RbacService;
+    const app = express()
+      .use(express.json())
+      .use('/integrations', createIntegrationsRouter(controller, authenticate, denied))
+      .use(refuse);
+
+    const response = await request(app).post('/integrations/delivery/shipments').send({});
+
+    expect(response.status).toBe(403);
+    expect(response.body).toEqual({ code: 'FORBIDDEN' });
   });
 });
