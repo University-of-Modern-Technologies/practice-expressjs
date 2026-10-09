@@ -3,7 +3,8 @@ services:
     image: ${PROJECT_NAME:-practice-crm-nodejs}_api_dev:latest
     build:
       target: dependencies
-    command: ['npm', 'run', 'dev']
+    # The script installs what the lock file added since the volume was filled.
+    command: ['sh', 'scripts/sync-dev-deps.sh', 'npm', 'run', 'dev']
     volumes:
       - ./backend:/app
       - api_node_modules:/app/node_modules
@@ -22,7 +23,13 @@ services:
     environment:
       APP_ENV: development
     command:
-      ['sh', '-c', 'npm run prisma:generate && npm run db:migrate:deploy && npm run db:seed']
+      [
+        'sh',
+        'scripts/sync-dev-deps.sh',
+        'sh',
+        '-c',
+        'npm run prisma:generate && npm run db:migrate:deploy && npm run db:seed',
+      ]
 
 volumes:
   api_node_modules:
