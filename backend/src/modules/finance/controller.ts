@@ -1,5 +1,5 @@
 import type { Request, RequestHandler } from 'express';
-import { AppError } from '../../common/errors/index.js';
+import { AppError, validationError } from '../../common/errors/index.js';
 import type { AuthContext } from '../../common/types/auth-context.js';
 import type { RbacService } from '../rbac/service.js';
 import type { PermissionScope } from '../rbac/types.js';
@@ -54,16 +54,13 @@ const accessFor = (request: Request, actorId: string, scope: PermissionScope): F
   ...(request.ip ? { ipAddress: request.ip } : {}),
 });
 
-const invalid = (details: unknown): AppError =>
-  new AppError('Invalid request', 400, 'VALIDATION_ERROR', details);
-
 export const createFinanceController = (
   service: FinanceService,
   rbac: RbacService,
 ): FinanceController => ({
   listStatements: async (request, response) => {
     const parsed = listStatementsSchema.safeParse({ query: request.query });
-    if (!parsed.success) throw invalid(parsed.error.flatten());
+    if (!parsed.success) throw validationError(parsed.error.flatten());
     const auth = getAuth(request);
     const scope = await getScope(rbac, auth.userId, 'read');
     response.json({
@@ -73,7 +70,7 @@ export const createFinanceController = (
 
   importStatement: async (request, response) => {
     const parsed = importStatementSchema.safeParse({ body: request.body ?? {} });
-    if (!parsed.success) throw invalid(parsed.error.flatten());
+    if (!parsed.success) throw validationError(parsed.error.flatten());
     const auth = getAuth(request);
     const scope = await getScope(rbac, auth.userId, 'write');
     response.json({
@@ -83,7 +80,7 @@ export const createFinanceController = (
 
   listTransactions: async (request, response) => {
     const parsed = listTransactionsSchema.safeParse({ query: request.query });
-    if (!parsed.success) throw invalid(parsed.error.flatten());
+    if (!parsed.success) throw validationError(parsed.error.flatten());
     const auth = getAuth(request);
     const scope = await getScope(rbac, auth.userId, 'read');
     response.json({
@@ -96,7 +93,7 @@ export const createFinanceController = (
 
   getTransactionById: async (request, response) => {
     const parsed = getTransactionSchema.safeParse({ params: request.params });
-    if (!parsed.success) throw invalid(parsed.error.flatten());
+    if (!parsed.success) throw validationError(parsed.error.flatten());
     const auth = getAuth(request);
     const scope = await getScope(rbac, auth.userId, 'read');
     response.json({
@@ -112,7 +109,7 @@ export const createFinanceController = (
       params: request.params,
       body: request.body,
     });
-    if (!parsed.success) throw invalid(parsed.error.flatten());
+    if (!parsed.success) throw validationError(parsed.error.flatten());
     const auth = getAuth(request);
     const scope = await getScope(rbac, auth.userId, 'write');
     response.json({
@@ -129,7 +126,7 @@ export const createFinanceController = (
       params: request.params,
       query: request.query,
     });
-    if (!parsed.success) throw invalid(parsed.error.flatten());
+    if (!parsed.success) throw validationError(parsed.error.flatten());
     const auth = getAuth(request);
     // Undoing a match is a write, not a deletion: the transaction stays, only
     // the conclusion about it is withdrawn.
@@ -145,7 +142,7 @@ export const createFinanceController = (
 
   reconcile: async (request, response) => {
     const parsed = reconcileSchema.safeParse({ body: request.body ?? {} });
-    if (!parsed.success) throw invalid(parsed.error.flatten());
+    if (!parsed.success) throw validationError(parsed.error.flatten());
     const auth = getAuth(request);
     const scope = await getScope(rbac, auth.userId, 'write');
     response.json({ data: await service.reconcile(accessFor(request, auth.userId, scope)) });
@@ -153,7 +150,7 @@ export const createFinanceController = (
 
   summary: async (request, response) => {
     const parsed = financeSummarySchema.safeParse({ query: request.query });
-    if (!parsed.success) throw invalid(parsed.error.flatten());
+    if (!parsed.success) throw validationError(parsed.error.flatten());
     const auth = getAuth(request);
     const scope = await getScope(rbac, auth.userId, 'read');
     response.json({

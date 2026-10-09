@@ -9,6 +9,7 @@ import {
 } from '../../common/types/domain-event-publisher.js';
 import type { Prisma, PrismaDatabase, PrismaTransaction } from '../../db/prisma.js';
 import type { AuditService } from '../audit/service.js';
+import type { OrderStatus } from '../orders/types.js';
 import { DEFAULT_REPORT_WINDOW_FROM, defaultReportWindowTo } from '../../common/reporting/index.js';
 import {
   MATCHABLE_ORDER_STATUSES,
@@ -74,7 +75,7 @@ interface BankTransactionRecord extends Omit<BankTransactionDto, 'amount'> {
 interface CandidateOrderRecord {
   readonly id: string;
   readonly orderNumber: string;
-  readonly status: string;
+  readonly status: OrderStatus;
   readonly currency: string;
   readonly total: DecimalLike;
   readonly contactId: string | null;

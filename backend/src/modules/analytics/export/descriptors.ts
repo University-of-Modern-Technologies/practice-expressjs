@@ -1,17 +1,22 @@
 import type { z } from 'zod';
 
 import type { AnalyticsService } from '../service.js';
-import type {
-  DealFunnelReport,
-  DealFunnelStage,
-  OwnerPerformanceReport,
-  OwnerPerformanceRow,
-  SalesSummaryBucket,
-  SalesSummaryReport,
-  StockHealthReport,
-  StockHealthRow,
-  TopProductRow,
-  TopProductsReport,
+import {
+  dealFunnelStageSchema,
+  ownerPerformanceRowSchema,
+  salesSummaryBucketSchema,
+  stockHealthRowSchema,
+  topProductRowSchema,
+  type DealFunnelReport,
+  type DealFunnelStage,
+  type OwnerPerformanceReport,
+  type OwnerPerformanceRow,
+  type SalesSummaryBucket,
+  type SalesSummaryReport,
+  type StockHealthReport,
+  type StockHealthRow,
+  type TopProductRow,
+  type TopProductsReport,
 } from '../types.js';
 import {
   dealFunnelSchema,
@@ -31,6 +36,8 @@ import type { ErasedExportColumn, ExportColumn } from './types.js';
 export interface AnalyticsExportDescriptor {
   readonly fileStem: string;
   readonly columns: readonly ErasedExportColumn[];
+  /** One row as `format=json` sends it; the API description reads it from here. */
+  readonly rowSchema: z.ZodType;
   readonly loadRows: (
     service: AnalyticsService,
     rawQuery: unknown,
@@ -44,6 +51,7 @@ interface DescriptorConfig<Query, Report, Row> {
   readonly fileStem: string;
   readonly schema: z.ZodType<{ query: Query }>;
   readonly run: (service: AnalyticsService, query: Query) => Promise<Report>;
+  readonly rowSchema: z.ZodType<Row>;
   readonly columns: readonly ExportColumn<Row>[];
   readonly rows: (report: Report) => readonly Row[];
 }
@@ -56,6 +64,7 @@ const defineDescriptor = <Query, Report, Row>(
 ): AnalyticsExportDescriptor => ({
   fileStem: config.fileStem,
   columns: config.columns as unknown as readonly ErasedExportColumn[],
+  rowSchema: config.rowSchema,
   loadRows: async (service, rawQuery) => {
     const parsed = config.schema.safeParse({ query: rawQuery });
     if (!parsed.success) return { ok: false, details: parsed.error.flatten() };
@@ -70,6 +79,7 @@ const salesSummaryDescriptor = defineDescriptor<
   SalesSummaryBucket
 >({
   fileStem: 'sales-summary',
+  rowSchema: salesSummaryBucketSchema,
   schema: salesSummarySchema,
   run: (service, query) => service.salesSummary(query),
   rows: (report) => report.series,
@@ -86,6 +96,7 @@ const dealFunnelDescriptor = defineDescriptor<
   DealFunnelStage
 >({
   fileStem: 'deal-funnel',
+  rowSchema: dealFunnelStageSchema,
   schema: dealFunnelSchema,
   run: (service, query) => service.dealFunnel(query),
   rows: (report) => report.stages,
@@ -102,6 +113,7 @@ const topProductsDescriptor = defineDescriptor<
   TopProductRow
 >({
   fileStem: 'top-products',
+  rowSchema: topProductRowSchema,
   schema: topProductsSchema,
   run: (service, query) => service.topProducts(query),
   rows: (report) => report.items,
@@ -120,6 +132,7 @@ const ownerPerformanceDescriptor = defineDescriptor<
   OwnerPerformanceRow
 >({
   fileStem: 'owner-performance',
+  rowSchema: ownerPerformanceRowSchema,
   schema: ownerPerformanceSchema,
   run: (service, query) => service.ownerPerformance(query),
   rows: (report) => report.items,
@@ -143,6 +156,7 @@ const stockHealthDescriptor = defineDescriptor<
   StockHealthRow
 >({
   fileStem: 'stock-health',
+  rowSchema: stockHealthRowSchema,
   schema: stockHealthSchema,
   run: (service, query) => service.stockHealth(query),
   rows: (report) => report.items,

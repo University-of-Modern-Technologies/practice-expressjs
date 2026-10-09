@@ -1,5 +1,5 @@
 import type { Request, RequestHandler } from 'express';
-import { AppError } from '../../common/errors/index.js';
+import { AppError, validationError } from '../../common/errors/index.js';
 import type { AuthContext } from '../../common/types/auth-context.js';
 import type { RbacService } from '../rbac/service.js';
 import type { PermissionScope } from '../rbac/types.js';
@@ -46,16 +46,13 @@ const accessFor = (request: Request, actorId: string, scope: PermissionScope): C
   ...(request.ip ? { ipAddress: request.ip } : {}),
 });
 
-const invalid = (details: unknown): AppError =>
-  new AppError('Invalid request', 400, 'VALIDATION_ERROR', details);
-
 export const createCallsController = (
   service: CallsService,
   rbac: RbacService,
 ): CallsController => ({
   list: async (request, response) => {
     const parsed = listCallsSchema.safeParse({ query: request.query });
-    if (!parsed.success) throw invalid(parsed.error.flatten());
+    if (!parsed.success) throw validationError(parsed.error.flatten());
     const auth = getAuth(request);
     const scope = await getScope(rbac, auth.userId, 'read');
     response.json({
@@ -65,7 +62,7 @@ export const createCallsController = (
 
   getById: async (request, response) => {
     const parsed = getCallSchema.safeParse({ params: request.params });
-    if (!parsed.success) throw invalid(parsed.error.flatten());
+    if (!parsed.success) throw validationError(parsed.error.flatten());
     const auth = getAuth(request);
     const scope = await getScope(rbac, auth.userId, 'read');
     response.json({
@@ -75,7 +72,7 @@ export const createCallsController = (
 
   sync: async (request, response) => {
     const parsed = syncCallsSchema.safeParse({ body: request.body ?? {} });
-    if (!parsed.success) throw invalid(parsed.error.flatten());
+    if (!parsed.success) throw validationError(parsed.error.flatten());
     const auth = getAuth(request);
     const scope = await getScope(rbac, auth.userId, 'write');
     response.json({ data: await service.sync(accessFor(request, auth.userId, scope)) });
@@ -83,7 +80,7 @@ export const createCallsController = (
 
   update: async (request, response) => {
     const parsed = updateCallSchema.safeParse({ params: request.params, body: request.body });
-    if (!parsed.success) throw invalid(parsed.error.flatten());
+    if (!parsed.success) throw validationError(parsed.error.flatten());
     const auth = getAuth(request);
     const scope = await getScope(rbac, auth.userId, 'write');
     response.json({
@@ -97,7 +94,7 @@ export const createCallsController = (
 
   link: async (request, response) => {
     const parsed = linkCallSchema.safeParse({ params: request.params, body: request.body });
-    if (!parsed.success) throw invalid(parsed.error.flatten());
+    if (!parsed.success) throw validationError(parsed.error.flatten());
     const auth = getAuth(request);
     const scope = await getScope(rbac, auth.userId, 'write');
     response.json({
@@ -111,7 +108,7 @@ export const createCallsController = (
 
   getRecording: async (request, response) => {
     const parsed = getCallRecordingSchema.safeParse({ params: request.params });
-    if (!parsed.success) throw invalid(parsed.error.flatten());
+    if (!parsed.success) throw validationError(parsed.error.flatten());
     const auth = getAuth(request);
     const scope = await getScope(rbac, auth.userId, 'read');
     response.json({
@@ -124,7 +121,7 @@ export const createCallsController = (
 
   delete: async (request, response) => {
     const parsed = deleteCallSchema.safeParse({ params: request.params, query: request.query });
-    if (!parsed.success) throw invalid(parsed.error.flatten());
+    if (!parsed.success) throw validationError(parsed.error.flatten());
     const auth = getAuth(request);
     const scope = await getScope(rbac, auth.userId, 'delete');
     await service.delete(

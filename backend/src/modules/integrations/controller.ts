@@ -1,6 +1,6 @@
 import type { Request, RequestHandler } from 'express';
 
-import { AppError } from '../../common/errors/index.js';
+import { AppError, validationError } from '../../common/errors/index.js';
 import type { AuthContext } from '../../common/types/auth-context.js';
 import type { RbacService } from '../rbac/service.js';
 import type { IntegrationsService } from './service.js';
@@ -34,16 +34,13 @@ const assertPermission = async (
   if (!scope) throw new AppError('Forbidden', 403, 'FORBIDDEN');
 };
 
-const invalid = (details: unknown): AppError =>
-  new AppError('Invalid request', 400, 'VALIDATION_ERROR', details);
-
 export const createIntegrationsController = (
   service: IntegrationsService,
   rbac: RbacService,
 ): IntegrationsController => ({
   createQuote: async (request, response) => {
     const parsed = createQuoteSchema.safeParse({ body: request.body });
-    if (!parsed.success) throw invalid(parsed.error.flatten());
+    if (!parsed.success) throw validationError(parsed.error.flatten());
     const auth = getAuth(request);
     await assertPermission(rbac, auth.userId, 'read');
     response.json({ data: await service.requestQuote(parsed.data.body) });
@@ -51,7 +48,7 @@ export const createIntegrationsController = (
 
   createShipment: async (request, response) => {
     const parsed = createShipmentSchema.safeParse({ body: request.body });
-    if (!parsed.success) throw invalid(parsed.error.flatten());
+    if (!parsed.success) throw validationError(parsed.error.flatten());
     const auth = getAuth(request);
     await assertPermission(rbac, auth.userId, 'write');
     response.status(201).json({ data: await service.createShipment(parsed.data.body) });
@@ -59,7 +56,7 @@ export const createIntegrationsController = (
 
   getShipment: async (request, response) => {
     const parsed = getShipmentSchema.safeParse({ params: request.params });
-    if (!parsed.success) throw invalid(parsed.error.flatten());
+    if (!parsed.success) throw validationError(parsed.error.flatten());
     const auth = getAuth(request);
     await assertPermission(rbac, auth.userId, 'read');
     response.json({ data: await service.getShipment(parsed.data.params.id) });

@@ -1,4 +1,7 @@
-import type { DealStage } from '../deals/types.js';
+import { z } from 'zod';
+
+import { decimalStringSchema } from '../../common/openapi/index.js';
+import { dealStageSchema } from '../deals/types.js';
 
 export const analyticsPeriods = ['day', 'week', 'month'] as const;
 export type AnalyticsPeriod = (typeof analyticsPeriods)[number];
@@ -14,89 +17,124 @@ export interface SalesSummaryQuery extends DateRange {
   readonly ownerId?: string | undefined;
 }
 
-export interface SalesSummaryBucket {
-  readonly bucketStart: string;
-  readonly orderCount: number;
-  readonly revenue: string;
-}
+// Report bounds and bucket starts are ISO 8601 strings, not dates: a report is
+// cached as JSON and must read back exactly as it was produced.
+const instant = z.iso.datetime();
+const count = z.int().min(0);
 
-export interface SalesSummaryReport {
-  readonly from: string;
-  readonly to: string;
-  readonly period: AnalyticsPeriod;
-  readonly totals: {
-    readonly orderCount: number;
-    readonly revenue: string;
-    readonly averageOrderValue: string;
-  };
-  readonly series: readonly SalesSummaryBucket[];
-}
+export const salesSummaryBucketSchema = z.object({
+  bucketStart: instant,
+  orderCount: count,
+  revenue: decimalStringSchema,
+});
+
+export type SalesSummaryBucket = Readonly<z.infer<typeof salesSummaryBucketSchema>>;
+
+export const salesSummaryReportSchema = z
+  .object({
+    from: instant,
+    to: instant,
+    period: z.enum(analyticsPeriods),
+    totals: z.object({
+      orderCount: count,
+      revenue: decimalStringSchema,
+      averageOrderValue: decimalStringSchema,
+    }),
+    series: z.array(salesSummaryBucketSchema),
+  })
+  .meta({ id: 'SalesSummaryReport' });
+
+export type SalesSummaryReport = Readonly<z.infer<typeof salesSummaryReportSchema>>;
 
 export interface DealFunnelQuery extends DateRange {
   readonly ownerId?: string | undefined;
 }
 
-export interface DealFunnelStage {
-  readonly stage: DealStage;
-  readonly count: number;
-  readonly amount: string;
-}
+export const dealFunnelStageSchema = z.object({
+  stage: dealStageSchema,
+  count,
+  amount: decimalStringSchema,
+});
 
-export interface DealFunnelConversion {
-  readonly from: DealStage;
-  readonly to: DealStage;
-  /** Ratio in `[0, 1]`, rounded to four decimals; 0 when the source is empty. */
-  readonly rate: number;
-}
+export type DealFunnelStage = Readonly<z.infer<typeof dealFunnelStageSchema>>;
 
-export interface DealFunnelReport {
-  readonly from: string;
-  readonly to: string;
-  readonly stages: readonly DealFunnelStage[];
-  readonly conversions: readonly DealFunnelConversion[];
-}
+const dealFunnelConversionSchema = z.object({
+  from: dealStageSchema,
+  to: dealStageSchema,
+  // 0 when the source stage is empty.
+  rate: z
+    .number()
+    .min(0)
+    .max(1)
+    .meta({ description: 'Частка в діапазоні [0, 1], округлена до чотирьох знаків.' }),
+});
+
+export type DealFunnelConversion = Readonly<z.infer<typeof dealFunnelConversionSchema>>;
+
+export const dealFunnelReportSchema = z
+  .object({
+    from: instant,
+    to: instant,
+    stages: z.array(dealFunnelStageSchema),
+    conversions: z.array(dealFunnelConversionSchema),
+  })
+  .meta({ id: 'DealFunnelReport' });
+
+export type DealFunnelReport = Readonly<z.infer<typeof dealFunnelReportSchema>>;
 
 export interface TopProductsQuery extends DateRange {
   readonly limit: number;
 }
 
-export interface TopProductRow {
-  readonly productId: string;
-  readonly sku: string;
-  readonly name: string;
-  readonly quantity: number;
-  readonly revenue: string;
-}
+export const topProductRowSchema = z.object({
+  productId: z.uuid(),
+  sku: z.string(),
+  name: z.string(),
+  quantity: count,
+  revenue: decimalStringSchema,
+});
 
-export interface TopProductsReport {
-  readonly from: string;
-  readonly to: string;
-  readonly limit: number;
-  readonly items: readonly TopProductRow[];
-}
+export type TopProductRow = Readonly<z.infer<typeof topProductRowSchema>>;
+
+export const topProductsReportSchema = z
+  .object({
+    from: instant,
+    to: instant,
+    limit: z.int().min(1),
+    items: z.array(topProductRowSchema),
+  })
+  .meta({ id: 'TopProductsReport' });
+
+export type TopProductsReport = Readonly<z.infer<typeof topProductsReportSchema>>;
 
 export interface OwnerPerformanceQuery extends DateRange {
   readonly limit: number;
 }
 
-export interface OwnerPerformanceRow {
-  readonly ownerId: string;
-  readonly name: string | null;
-  readonly email: string | null;
-  readonly dealCount: number;
-  readonly dealAmount: string;
-  readonly wonDealCount: number;
-  readonly wonDealAmount: string;
-  readonly winRate: number;
-  readonly orderCount: number;
-  readonly orderRevenue: string;
-}
+export const ownerPerformanceRowSchema = z.object({
+  ownerId: z.uuid(),
+  name: z.string().nullable(),
+  email: z.email().nullable(),
+  dealCount: count,
+  dealAmount: decimalStringSchema,
+  wonDealCount: count,
+  wonDealAmount: decimalStringSchema,
+  winRate: z.number().min(0).max(1),
+  orderCount: count,
+  orderRevenue: decimalStringSchema,
+});
 
-export interface OwnerPerformanceReport {
-  readonly from: string;
-  readonly to: string;
-  readonly items: readonly OwnerPerformanceRow[];
-}
+export type OwnerPerformanceRow = Readonly<z.infer<typeof ownerPerformanceRowSchema>>;
+
+export const ownerPerformanceReportSchema = z
+  .object({
+    from: instant,
+    to: instant,
+    items: z.array(ownerPerformanceRowSchema),
+  })
+  .meta({ id: 'OwnerPerformanceReport' });
+
+export type OwnerPerformanceReport = Readonly<z.infer<typeof ownerPerformanceReportSchema>>;
 
 export interface StockHealthQuery {
   readonly threshold: number;
@@ -104,19 +142,25 @@ export interface StockHealthQuery {
   readonly warehouseId?: string | undefined;
 }
 
-export interface StockHealthRow {
-  readonly productId: string;
-  readonly sku: string;
-  readonly name: string;
-  readonly warehouseId: string;
-  readonly warehouseCode: string;
-  readonly quantityOnHand: number;
-  readonly quantityReserved: number;
-  readonly quantityAvailable: number;
-}
+export const stockHealthRowSchema = z.object({
+  productId: z.uuid(),
+  sku: z.string(),
+  name: z.string(),
+  warehouseId: z.uuid(),
+  warehouseCode: z.string(),
+  quantityOnHand: z.int(),
+  quantityReserved: z.int(),
+  quantityAvailable: z.int(),
+});
 
-export interface StockHealthReport {
-  readonly threshold: number;
-  readonly limit: number;
-  readonly items: readonly StockHealthRow[];
-}
+export type StockHealthRow = Readonly<z.infer<typeof stockHealthRowSchema>>;
+
+export const stockHealthReportSchema = z
+  .object({
+    threshold: count,
+    limit: z.int().min(1),
+    items: z.array(stockHealthRowSchema),
+  })
+  .meta({ id: 'StockHealthReport' });
+
+export type StockHealthReport = Readonly<z.infer<typeof stockHealthReportSchema>>;

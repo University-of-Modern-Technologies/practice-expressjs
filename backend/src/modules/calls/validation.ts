@@ -21,7 +21,9 @@ export const listCallsSchema = z.object({
       ownerId: z.string().uuid().optional(),
       startedFrom: timestamp.optional(),
       startedTo: timestamp.optional(),
-      hasContact: boolean.optional(),
+      hasContact: boolean
+        .optional()
+        .meta({ description: 'true — лише прив’язані до контакту, false — лише непов’язані.' }),
       sortBy: z.enum(callSortFields).default('startedAt'),
       sortOrder: z.enum(['asc', 'desc']).default('desc'),
     })

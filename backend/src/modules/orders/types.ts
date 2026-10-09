@@ -1,3 +1,10 @@
+import { z } from 'zod';
+
+import {
+  currencyCodeSchema,
+  decimalStringSchema,
+  versionNumberSchema,
+} from '../../common/openapi/index.js';
 import type { PermissionScope } from '../rbac/types.js';
 
 export const orderStatuses = ['DRAFT', 'CONFIRMED', 'PAID', 'FULFILLED', 'CANCELLED'] as const;
@@ -11,39 +18,50 @@ export type OrderStatus = (typeof orderStatuses)[number];
  */
 export type OrderStockEffect = 'reserve' | 'release' | 'issue';
 
-export interface OrderItemDto {
-  readonly id: string;
-  readonly orderId: string;
-  readonly productId: string;
-  /** Snapshot of the catalogue entry taken when the line was added. */
-  readonly sku: string;
-  readonly name: string;
-  readonly quantity: number;
-  readonly unitPrice: string;
-  readonly lineTotal: string;
-  readonly createdAt: Date;
-  readonly updatedAt: Date;
-}
+export const orderStatusSchema = z.enum(orderStatuses).meta({ id: 'OrderStatus' });
 
-export interface OrderDto {
-  readonly id: string;
-  readonly orderNumber: string;
-  readonly ownerId: string;
-  readonly contactId: string | null;
-  readonly dealId: string | null;
-  readonly status: OrderStatus;
-  readonly currency: string;
-  readonly subtotal: string;
-  readonly discountTotal: string;
-  readonly taxTotal: string;
-  readonly total: string;
-  readonly notes: string | null;
-  readonly version: number;
-  readonly placedAt: Date | null;
-  readonly createdAt: Date;
-  readonly updatedAt: Date;
-  readonly items: readonly OrderItemDto[];
-}
+export const orderItemSchema = z
+  .object({
+    id: z.uuid(),
+    orderId: z.uuid(),
+    productId: z.uuid(),
+    sku: z.string().meta({ description: 'Знімок каталогу на момент додавання рядка.' }),
+    name: z.string(),
+    quantity: z.int().min(1),
+    unitPrice: decimalStringSchema,
+    lineTotal: decimalStringSchema,
+    createdAt: z.date(),
+    updatedAt: z.date(),
+  })
+  .meta({ id: 'OrderItem' });
+
+export type OrderItemDto = Readonly<z.infer<typeof orderItemSchema>>;
+
+export const orderSchema = z
+  .object({
+    id: z.uuid(),
+    orderNumber: z.string().meta({ description: 'Видається сервером.' }),
+    ownerId: z.uuid(),
+    contactId: z.uuid().nullable(),
+    dealId: z.uuid().nullable(),
+    status: orderStatusSchema,
+    currency: currencyCodeSchema,
+    subtotal: decimalStringSchema,
+    discountTotal: decimalStringSchema,
+    taxTotal: decimalStringSchema,
+    total: decimalStringSchema.meta({
+      description: 'Обчислюється сервером із рядків замовлення.',
+    }),
+    notes: z.string().nullable(),
+    version: versionNumberSchema,
+    placedAt: z.date().nullable(),
+    createdAt: z.date(),
+    updatedAt: z.date(),
+    items: z.array(orderItemSchema),
+  })
+  .meta({ id: 'Order' });
+
+export type OrderDto = Readonly<z.infer<typeof orderSchema>>;
 
 export interface OrderAccess {
   readonly actorId: string;

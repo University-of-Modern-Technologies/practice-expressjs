@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 const userIdParams = z.object({ id: z.string().uuid() });
 const roleIdsSchema = z.array(z.string().uuid()).min(1).max(20);
+const passwordSchema = z.string().min(8).max(128).meta({ format: 'password' });
 
 export const listUsersSchema = z.object({
   query: z.object({
@@ -26,7 +27,7 @@ export const createUserSchema = z.object({
       .email()
       .transform((value) => value.toLowerCase()),
     name: z.string().trim().min(1).max(120),
-    password: z.string().min(8).max(128),
+    password: passwordSchema,
     roleIds: roleIdsSchema,
   }),
 });
@@ -42,7 +43,7 @@ export const updateUserSchema = z.object({
         .transform((value) => value.toLowerCase())
         .optional(),
       name: z.string().trim().min(1).max(120).optional(),
-      password: z.string().min(8).max(128).optional(),
+      password: passwordSchema.optional(),
       roleIds: roleIdsSchema.optional(),
     })
     .refine((value) => Object.keys(value).length > 0, 'At least one field is required'),
