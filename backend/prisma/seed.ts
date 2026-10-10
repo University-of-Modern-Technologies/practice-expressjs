@@ -123,6 +123,14 @@ function getSeedPassword(): string {
 }
 
 async function main(): Promise<void> {
+  // The stack runs the seed on every start, so it fills an empty database only;
+  // otherwise each restart would bring back changed passwords, disabled users
+  // and the stock levels the demo started with.
+  if ((await prisma.user.count()) > 0) {
+    console.log('The database already holds users; the seed leaves it as it is.');
+    return;
+  }
+
   const passwordHash = await hashPassword(getSeedPassword());
 
   await prisma.$transaction(async (tx) => {

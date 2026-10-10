@@ -12,12 +12,16 @@ import type { AuthContext } from '../common/types/auth-context.js';
 import { createRealtimeGateway, type RealtimeGatewayDependencies } from './gateway.js';
 import { createWebSocketServer as createDefaultWebSocketServer } from './ws-server.js';
 import {
+  CLOSE_CODE_SESSION_ENDED,
+  CLOSE_REASON_SESSION_ENDED,
+  CLOSE_REASON_TOKEN_EXPIRED,
   REALTIME_ERROR_CODES,
   SOCKET_STATE,
   type RawSocketData,
   type RealtimeSocket,
   type RealtimeSocketEvents,
   type RealtimeWebSocketServer,
+  type VerifiedAccessToken,
 } from './types.js';
 
 class FakeSocket implements RealtimeSocket {
@@ -106,6 +110,12 @@ const createFakeLogger = (): Logger => {
 
 const auth: AuthContext = { userId: 'user-1', sessionId: 'session-1' };
 
+/** What the upgrade path verifies a token into: the identity, and when it runs out. */
+const verified = (): VerifiedAccessToken => ({
+  ...auth,
+  expiresAt: new Date(Date.now() + 15 * 60_000),
+});
+
 const send = (socket: FakeSocket, message: unknown): void => {
   socket.emitMessage(JSON.stringify(message));
 };
@@ -156,7 +166,7 @@ const createHarness = (overrides: Partial<RealtimeGatewayDependencies> = {}): Ha
   const deps = {
     config: { wsPath: '/api/v1/realtime' },
     logger,
-    verifyAccessToken: () => auth,
+    verifyAccessToken: verified,
     canSubscribe: () => true,
     createWebSocketServer: () => wsServer as unknown as RealtimeWebSocketServer,
     ...overrides,
@@ -254,7 +264,7 @@ describe('realtime gateway — inbound message handling', () => {
     const gateway = createRealtimeGateway({
       config: { wsPath: '/api/v1/realtime' },
       logger: createFakeLogger(),
-      verifyAccessToken: () => auth,
+      verifyAccessToken: verified,
       options: { maxInboundMessageBytes: 32 },
     });
     gateway.attach(new EventEmitter() as unknown as HttpServer);
@@ -387,7 +397,7 @@ describe('realtime gateway — authorisation', () => {
     const gateway = createRealtimeGateway({
       config: { wsPath: '/api/v1/realtime' },
       logger,
-      verifyAccessToken: () => auth,
+      verifyAccessToken: verified,
     });
     const socket = new FakeSocket();
     gateway.handleConnection(socket, auth);
@@ -710,5 +720,216 @@ describe('realtime gateway — attach and shutdown', () => {
     await flush();
 
     expect(socket.write).toHaveBeenCalledWith(expect.stringContaining('503 Service Unavailable'));
+  });
+});
+
+// A socket lives no longer than the credentials it was opened with.
+describe('realtime gateway — sockets whose session ends', () => {
+  beforeEach(() => {
+    jest.useFakeTimers();
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  const expiredClose = { code: CLOSE_CODE_SESSION_ENDED, reason: CLOSE_REASON_TOKEN_EXPIRED };
+  const endedClose = { code: CLOSE_CODE_SESSION_ENDED, reason: CLOSE_REASON_SESSION_ENDED };
+  const hasEvent = (socket: FakeSocket): boolean =>
+    socket.frames().some((frame) => frame.type === 'event');
+
+  it('closes the socket with 4001 the moment its access token expires', async () => {
+    const { gateway } = createHarness();
+    const socket = new FakeSocket();
+    gateway.handleConnection(socket, { ...auth, expiresAt: new Date(Date.now() + 1_000) });
+    send(socket, { type: 'subscribe', topic: 'deals' });
+    await flush();
+
+    jest.advanceTimersByTime(999);
+    expect(socket.closeCalls).toEqual([]);
+
+    jest.advanceTimersByTime(1);
+    expect(socket.closeCalls).toEqual([expiredClose]);
+    expect(gateway.getStats()).toEqual({ connections: 0, topics: 0, subscriptions: 0 });
+
+    gateway.publish('deals', { dealId: 'd1' });
+    expect(hasEvent(socket)).toBe(false);
+  });
+
+  it('takes the expiry from the token verified at the handshake', async () => {
+    const { gateway, wsServer } = createHarness({
+      verifyAccessToken: () => ({ ...auth, expiresAt: new Date(Date.now() + 500) }),
+    });
+    const server = new EventEmitter();
+    gateway.attach(server as unknown as HttpServer);
+    const client = new FakeSocket();
+    wsServer.nextSocket = client;
+
+    server.emit(
+      'upgrade',
+      { url: '/api/v1/realtime', headers: { authorization: 'Bearer good' } },
+      { write: jest.fn(), destroy: jest.fn() },
+      Buffer.alloc(0),
+    );
+    await flush();
+    expect(gateway.getStats().connections).toBe(1);
+
+    jest.advanceTimersByTime(500);
+    expect(client.closeCalls).toEqual([expiredClose]);
+
+    await gateway.close();
+  });
+
+  it('closes at once a socket whose token is already spent', () => {
+    const { gateway } = createHarness();
+    const socket = new FakeSocket();
+    gateway.handleConnection(socket, { ...auth, expiresAt: new Date(Date.now() - 1) });
+
+    jest.advanceTimersByTime(0);
+
+    expect(socket.closeCalls).toEqual([expiredClose]);
+  });
+
+  it('leaves no expiry timer behind once the socket closes', () => {
+    const { gateway } = createHarness();
+    const socket = new FakeSocket();
+    gateway.handleConnection(socket, { ...auth, expiresAt: new Date(Date.now() + 60_000) });
+    expect(jest.getTimerCount()).toBe(2);
+
+    socket.emitClose();
+
+    expect(jest.getTimerCount()).toBe(0);
+  });
+
+  it('closes exactly the sockets of a revoked session', async () => {
+    const { gateway } = createHarness();
+    const revoked = new FakeSocket();
+    const sibling = new FakeSocket();
+    const stranger = new FakeSocket();
+    gateway.handleConnection(revoked, { userId: 'user-1', sessionId: 'session-a' });
+    gateway.handleConnection(sibling, { userId: 'user-1', sessionId: 'session-b' });
+    gateway.handleConnection(stranger, { userId: 'user-2', sessionId: 'session-c' });
+    for (const socket of [revoked, sibling, stranger]) {
+      send(socket, { type: 'subscribe', topic: 'deals' });
+    }
+    await flush();
+
+    // The database compares identifiers without regard to case; so does this.
+    gateway.sessionsRevoked(['SESSION-A']);
+
+    expect(revoked.closeCalls).toEqual([endedClose]);
+    expect(sibling.closeCalls).toEqual([]);
+    expect(stranger.closeCalls).toEqual([]);
+
+    gateway.publish('deals', { dealId: 'd1' });
+    expect(hasEvent(revoked)).toBe(false);
+    expect(hasEvent(sibling)).toBe(true);
+  });
+
+  it('closes every socket of a user whose sessions all ended', () => {
+    const { gateway } = createHarness();
+    const first = new FakeSocket();
+    const second = new FakeSocket();
+    const stranger = new FakeSocket();
+    gateway.handleConnection(first, { userId: 'user-1', sessionId: 'session-a' });
+    gateway.handleConnection(second, { userId: 'user-1', sessionId: 'session-b' });
+    gateway.handleConnection(stranger, { userId: 'user-2', sessionId: 'session-c' });
+
+    gateway.userSessionsRevoked('USER-1');
+
+    expect(first.closeCalls).toEqual([endedClose]);
+    expect(second.closeCalls).toEqual([endedClose]);
+    expect(stranger.closeCalls).toEqual([]);
+    expect(gateway.getStats().connections).toBe(1);
+  });
+});
+
+// The frames of one connection are handled one at a time, in order.
+describe('realtime gateway — inbound frame order', () => {
+  /** An authoriser whose answers are released by hand, one check at a time. */
+  const manualAuthoriser = () => {
+    const waiting: Array<() => void> = [];
+    const canSubscribe = jest.fn(
+      () =>
+        new Promise<boolean>((resolve) => {
+          waiting.push(() => {
+            resolve(true);
+          });
+        }),
+    );
+    const releaseAll = async (): Promise<void> => {
+      await flush();
+      for (let next = waiting.shift(); next !== undefined; next = waiting.shift()) {
+        next();
+        await flush();
+      }
+    };
+    return { canSubscribe, waiting, releaseAll };
+  };
+
+  it('holds the subscription limit against a burst of frames', async () => {
+    const { canSubscribe, releaseAll } = manualAuthoriser();
+    const { gateway } = createHarness({
+      canSubscribe,
+      options: { maxSubscriptionsPerConnection: 2 },
+    });
+    const socket = new FakeSocket();
+    gateway.handleConnection(socket, auth);
+
+    for (const topic of ['deals', 'orders', 'entity:deal:d1', 'entity:order:o1']) {
+      send(socket, { type: 'subscribe', topic });
+    }
+    await releaseAll();
+
+    expect(gateway.getStats().subscriptions).toBe(2);
+    expect(canSubscribe).toHaveBeenCalledTimes(2);
+    expect(socket.frames().slice(1)).toEqual([
+      { type: 'subscribed', topic: 'deals' },
+      { type: 'subscribed', topic: 'orders' },
+      expect.objectContaining({ type: 'error', code: REALTIME_ERROR_CODES.subscriptionLimit }),
+      expect.objectContaining({ type: 'error', code: REALTIME_ERROR_CODES.subscriptionLimit }),
+    ]);
+  });
+
+  it('applies an unsubscribe after the subscribe sent before it', async () => {
+    const { canSubscribe, waiting, releaseAll } = manualAuthoriser();
+    const { gateway } = createHarness({ canSubscribe });
+    const socket = new FakeSocket();
+    gateway.handleConnection(socket, auth);
+
+    send(socket, { type: 'subscribe', topic: 'deals' });
+    send(socket, { type: 'unsubscribe', topic: 'deals' });
+    send(socket, { type: 'ping' });
+    await flush();
+
+    // The check is still out: nothing behind the subscribe has been answered.
+    expect(waiting).toHaveLength(1);
+    expect(socket.frames().slice(1)).toEqual([]);
+
+    await releaseAll();
+
+    expect(socket.frames().slice(1)).toEqual([
+      { type: 'subscribed', topic: 'deals' },
+      { type: 'unsubscribed', topic: 'deals' },
+      { type: 'pong' },
+    ]);
+    expect(gateway.getStats().subscriptions).toBe(0);
+  });
+
+  it('drops the frames still queued when the session ends', async () => {
+    const { canSubscribe, releaseAll } = manualAuthoriser();
+    const { gateway } = createHarness({ canSubscribe });
+    const socket = new FakeSocket();
+    gateway.handleConnection(socket, auth);
+
+    send(socket, { type: 'subscribe', topic: 'deals' });
+    send(socket, { type: 'subscribe', topic: 'orders' });
+    await flush();
+    gateway.sessionsRevoked([auth.sessionId]);
+    await releaseAll();
+
+    expect(canSubscribe).toHaveBeenCalledTimes(1);
+    expect(socket.frames().slice(1)).toEqual([]);
+    expect(gateway.getStats()).toEqual({ connections: 0, topics: 0, subscriptions: 0 });
   });
 });

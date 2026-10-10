@@ -249,11 +249,10 @@ const createModules = ({
   const auditService = createAuditService(prisma);
   const eventStore = createEventStoreService(logger, config);
   const rbacService = createRbacService(prisma, cache, config.cacheTtlSeconds);
-  const authService = createAuthService(prisma, authConfig);
-  const authenticate = createAuthenticate(authService);
-
   // The gateway never imports RBAC; authorisation is injected so that the
   // realtime channel enforces exactly the same permissions as the HTTP API.
+  // It is built before the auth service, which tells it about ended sessions;
+  // its token check only runs on a handshake, once both exist.
   const realtime = createRealtimeGateway({
     config,
     logger,
@@ -271,17 +270,31 @@ const createModules = ({
       return scope !== null;
     },
   });
+  const authService = createAuthService(prisma, authConfig, realtime);
+  const authenticate = createAuthenticate(authService);
 
   const authController = createAuthController(authService, authConfig);
-  const usersController = createUsersController(createUsersService(prisma, rbacService));
+  const usersController = createUsersController(
+    createUsersService(prisma, rbacService, auditService, realtime),
+  );
   const rbacController = createRbacController(rbacService);
   const contactsController = createContactsController(
     createContactsService(prisma, auditService),
     rbacService,
   );
   const publisher = createDomainEventPublisher(eventStore, realtime, logger);
+  const settingsService = createSettingsService(
+    prisma,
+    auditService,
+    cache,
+    config.cacheTtlSeconds,
+  );
+  // One currency for the whole organization: orders, deals and products take
+  // it from settings and refuse any other, so totals never add up currencies.
+  const resolveOrganizationCurrency = (): Promise<string> =>
+    settingsService.get('organization.defaultCurrency');
   const dealsController = createDealsController(
-    createDealsService(prisma, auditService, publisher),
+    createDealsService(prisma, auditService, publisher, { resolveOrganizationCurrency }),
     rbacService,
   );
   const callsController = createCallsController(
@@ -313,14 +326,8 @@ const createModules = ({
   );
   const auditController = createAuditController(auditService, rbacService);
   const productsController = createProductsController(
-    createProductsService(prisma, auditService, publisher),
+    createProductsService(prisma, auditService, publisher, { resolveOrganizationCurrency }),
     rbacService,
-  );
-  const settingsService = createSettingsService(
-    prisma,
-    auditService,
-    cache,
-    config.cacheTtlSeconds,
   );
   const ordersController = createOrdersController(
     createOrdersService(prisma, auditService, publisher, {
@@ -340,6 +347,10 @@ const createModules = ({
 
         return warehouse?.id ?? null;
       },
+      resolveOrderDefaults: async () => ({
+        currency: await resolveOrganizationCurrency(),
+        numberPrefix: await settingsService.get('orders.numberPrefix'),
+      }),
     }),
     rbacService,
   );
@@ -358,6 +369,17 @@ const createModules = ({
     createIntegrationsService(deliveryClient, {
       cache,
       quoteCacheTtlSeconds: config.deliveryQuoteCacheTtlSeconds,
+      // A shipment is booked only for an order the caller can see; the
+      // service itself decides which statuses can be shipped.
+      findOrderForShipment: (orderId, access) =>
+        prisma.order.findFirst({
+          where: {
+            id: orderId,
+            deletedAt: null,
+            ...(access.scope === 'OWN' ? { ownerId: access.actorId } : {}),
+          },
+          select: { status: true },
+        }),
     }),
     rbacService,
   );

@@ -1,7 +1,8 @@
 import type { RequestHandler } from 'express';
-import { z } from 'zod';
+import type { z } from 'zod';
 
 import { AppError } from '../errors/app-error.js';
+import { describeValidationIssues } from '../errors/validation-error.js';
 
 interface RequestInput {
   readonly body: unknown;
@@ -29,7 +30,9 @@ export const validate = (schema: RequestInputSchema): RequestHandler => {
           'Request validation failed',
           400,
           'VALIDATION_ERROR',
-          z.flattenError(result.error),
+          // Not `z.flattenError`: it groups by the first path segment only, so
+          // every body message arrived without the name of its field.
+          describeValidationIssues(result.error),
         ),
       );
       return;

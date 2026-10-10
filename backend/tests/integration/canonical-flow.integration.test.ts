@@ -46,7 +46,7 @@ describe('canonical database-backed CRM flow', () => {
         contactId,
         title: 'Canonical journey deal',
         amount: '4200.00',
-        currency: 'eur',
+        currency: 'usd',
         expectedCloseDate: '2026-12-31',
       });
     expect(dealResponse.status).toBe(201);
@@ -55,7 +55,7 @@ describe('canonical database-backed CRM flow', () => {
       contactId,
       title: 'Canonical journey deal',
       stage: 'LEAD',
-      currency: 'EUR',
+      currency: 'USD',
       probability: 10,
     });
 

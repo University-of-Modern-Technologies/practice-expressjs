@@ -112,4 +112,84 @@ describe('products, warehouse and orders against the live database', () => {
       });
     expect(receiveOnInactive.status).toBe(200);
   });
+
+  it('keeps an order reservation owned by the order', async () => {
+    const manager = await login(root.app, seed.users.manager);
+    const auth = bearer(manager.accessToken);
+
+    const productResponse = await request(root.app)
+      .post('/api/v1/products')
+      .set('Authorization', auth)
+      .send({
+        sku: `INT-RES-${Date.now()}`,
+        name: 'Reservation probe product',
+        category: 'Licences',
+        unitPrice: '10.00',
+      });
+    expect(productResponse.status).toBe(201);
+    const productId = productResponse.body.data.id as string;
+
+    await request(root.app)
+      .post('/api/v1/warehouse/stock/receive')
+      .set('Authorization', auth)
+      .send({ warehouseId: seed.warehouses.central, productId, quantity: 10 });
+
+    const orderResponse = await request(root.app)
+      .post('/api/v1/orders')
+      .set('Authorization', auth)
+      .send({ contactId: seed.contacts.manager, items: [{ productId, quantity: 3 }] });
+    expect(orderResponse.status).toBe(201);
+    expect(orderResponse.body.data.warehouseId).toBeNull();
+    const orderId = orderResponse.body.data.id as string;
+
+    const confirmResponse = await request(root.app)
+      .post(`/api/v1/orders/${orderId}/transitions`)
+      .set('Authorization', auth)
+      .send({ status: 'CONFIRMED', version: 1 });
+    expect(confirmResponse.status).toBe(200);
+    // The warehouse the order reserved in is part of the order from now on.
+    expect(confirmResponse.body.data.warehouseId).toBe(seed.warehouses.central);
+
+    const reservation = {
+      warehouseId: seed.warehouses.central,
+      productId,
+      quantity: 3,
+      referenceType: 'order',
+      referenceId: orderId,
+    };
+
+    // Only the order's own transitions move stock under its reference.
+    const manualReserve = await request(root.app)
+      .post('/api/v1/warehouse/stock/reserve')
+      .set('Authorization', auth)
+      .send(reservation);
+    expect(manualReserve.status).toBe(409);
+    expect(manualReserve.body.error.code).toBe('STOCK_ORDER_REFERENCE_FORBIDDEN');
+
+    const manualRelease = await request(root.app)
+      .post('/api/v1/warehouse/stock/release')
+      .set('Authorization', auth)
+      .send(reservation);
+    expect(manualRelease.status).toBe(409);
+    expect(manualRelease.body.error.code).toBe('STOCK_ORDER_REFERENCE_FORBIDDEN');
+
+    // An order that holds a reservation may not disappear.
+    const deleteOrder = await request(root.app)
+      .delete(`/api/v1/orders/${orderId}`)
+      .query({ version: 2 })
+      .set('Authorization', auth);
+    expect(deleteOrder.status).toBe(409);
+    expect(deleteOrder.body.error.code).toBe('ORDER_NOT_DELETABLE');
+
+    const cancelResponse = await request(root.app)
+      .post(`/api/v1/orders/${orderId}/transitions`)
+      .set('Authorization', auth)
+      .send({ status: 'CANCELLED', version: 2 });
+    expect(cancelResponse.status).toBe(200);
+
+    const stockAfterCancel = await request(root.app)
+      .get(`/api/v1/warehouse/stock/${seed.warehouses.central}/${productId}`)
+      .set('Authorization', auth);
+    expect(stockAfterCancel.body.data).toMatchObject({ quantityOnHand: 10, quantityReserved: 0 });
+  });
 });

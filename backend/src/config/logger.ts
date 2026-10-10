@@ -1,4 +1,4 @@
-import pino, { type Logger } from 'pino';
+import pino, { type DestinationStream, type Logger } from 'pino';
 
 import type { AppConfig } from './env.js';
 
@@ -13,7 +13,26 @@ const supportsPrettyTransport = (): boolean => {
   }
 };
 
-export const createLogger = (config: AppConfig): Logger => {
+/**
+ * Fields that never reach a log line in clear text. The request carries the
+ * session in `Authorization` and `Cookie`; the response hands out a fresh
+ * refresh token in `Set-Cookie`, which is just as much a credential.
+ */
+export const LOG_REDACT_PATHS: readonly string[] = [
+  'req.headers.authorization',
+  'req.headers.cookie',
+  'res.headers["set-cookie"]',
+  'password',
+  '*.password',
+  'token',
+  '*.token',
+];
+
+/**
+ * `destination` exists for tests that need to read what was written; the
+ * running service always logs to standard output.
+ */
+export const createLogger = (config: AppConfig, destination?: DestinationStream): Logger => {
   const baseOptions = {
     level: config.logLevel,
     base: {
@@ -21,17 +40,12 @@ export const createLogger = (config: AppConfig): Logger => {
       environment: config.appEnv,
     },
     redact: {
-      paths: [
-        'req.headers.authorization',
-        'req.headers.cookie',
-        'password',
-        '*.password',
-        'token',
-        '*.token',
-      ],
+      paths: [...LOG_REDACT_PATHS],
       censor: '[REDACTED]',
     },
   };
+
+  if (destination) return pino(baseOptions, destination);
 
   return config.appEnv === 'development' && supportsPrettyTransport()
     ? pino({

@@ -56,14 +56,16 @@ const buildOccurredAtFilter = (from?: Date, to?: Date): EventFilter =>
 
 export const createEventStoreService = (
   logger: Logger,
-  config: AppConfig,
+  // The model no longer depends on configuration: the retention window lives
+  // in the index, which the connection creates. Kept for the caller's shape.
+  _config: AppConfig,
   dependencies: EventStoreDependencies = {},
 ): EventStoreService => {
   let model: DomainEventModelPort | null = dependencies.model ?? null;
 
   const resolveModel = async (): Promise<DomainEventModelPort> => {
     // Imported on demand so callers that inject a model never load the driver.
-    model ??= (await import('./event-log.model.js')).getDomainEventModelPort(config);
+    model ??= (await import('./event-log.model.js')).getDomainEventModelPort();
     return model;
   };
 

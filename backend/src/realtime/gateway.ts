@@ -10,6 +10,9 @@ import { extractAccessToken } from './auth.js';
 import { parseRealtimeTopic, type RealtimeTopic } from './topics.js';
 import {
   CLOSE_CODE_GOING_AWAY,
+  CLOSE_CODE_SESSION_ENDED,
+  CLOSE_REASON_SESSION_ENDED,
+  CLOSE_REASON_TOKEN_EXPIRED,
   REALTIME_ERROR_CODES,
   SOCKET_STATE,
   type CanSubscribe,
@@ -20,11 +23,12 @@ import {
   type RealtimeGateway,
   type RealtimeGatewayOptions,
   type RealtimeGatewayStats,
+  type RealtimeIdentity,
   type RealtimeSocket,
   type RealtimeWebSocketServer,
   type VerifyAccessToken,
 } from './types.js';
-import { readInboundFrame } from './validation.js';
+import { readInboundFrame, type InboundParseResult } from './validation.js';
 import { createWebSocketServer as createDefaultWebSocketServer } from './ws-server.js';
 
 export type RealtimeGatewayConfig = Pick<AppConfig, 'wsPath'>;
@@ -51,12 +55,25 @@ const DEFAULT_OPTIONS: RealtimeGatewayOptions = {
   maxSubscriptionsPerConnection: 20,
 };
 
+/** The longest delay a Node timer accepts; a later expiry is reached in steps. */
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
+
 interface Connection {
   readonly id: string;
   readonly socket: RealtimeSocket;
-  readonly auth: AuthContext;
+  readonly auth: RealtimeIdentity;
   readonly topics: Set<RealtimeTopic>;
   isAlive: boolean;
+  /**
+   * Frames not answered yet. They are handled one at a time, in the order they
+   * arrived: a subscribe awaits its authorisation check, and the frames behind
+   * it wait for that check instead of overtaking it.
+   */
+  readonly inbound: InboundParseResult[];
+  /** Whether a drain of `inbound` is under way. */
+  draining: boolean;
+  /** Closes the socket when the access token it was opened with expires. */
+  expiry: NodeJS.Timeout | null;
 }
 
 const UNAUTHORIZED_RESPONSE = [
@@ -128,10 +145,60 @@ export const createRealtimeGateway = (deps: RealtimeGatewayDependencies): Realti
     connection.topics.clear();
   };
 
+  const clearExpiry = (connection: Connection): void => {
+    if (connection.expiry === null) return;
+    clearTimeout(connection.expiry);
+    connection.expiry = null;
+  };
+
   const forget = (connection: Connection): void => {
     if (!connections.delete(connection.id)) return;
+    clearExpiry(connection);
     unsubscribeAll(connection);
     stopHeartbeatWhenIdle();
+  };
+
+  /**
+   * Closes a socket whose credentials are no longer valid. The connection is
+   * dropped from the registry first, so not one more event reaches it while
+   * the close handshake is under way.
+   */
+  const endSession = (connection: Connection, reason: string): void => {
+    if (!connections.has(connection.id)) return;
+    forget(connection);
+    logger.debug({ connectionId: connection.id, reason }, 'Closing realtime socket');
+    try {
+      connection.socket.close(CLOSE_CODE_SESSION_ENDED, reason);
+    } catch (error) {
+      logger.warn({ err: error, connectionId: connection.id }, 'Socket close failed');
+    }
+  };
+
+  const armExpiry = (connection: Connection): void => {
+    const { expiresAt } = connection.auth;
+    if (expiresAt === undefined) return;
+
+    // An unreadable expiry yields NaN, which fires at once and then fails the
+    // check below: a token whose lifetime cannot be read is treated as spent.
+    const remaining = expiresAt.getTime() - Date.now();
+    connection.expiry = setTimeout(
+      () => {
+        connection.expiry = null;
+        if (Date.now() < expiresAt.getTime()) {
+          armExpiry(connection);
+          return;
+        }
+        endSession(connection, CLOSE_REASON_TOKEN_EXPIRED);
+      },
+      Math.min(Math.max(remaining, 0), MAX_TIMER_DELAY_MS),
+    );
+    connection.expiry.unref?.();
+  };
+
+  const endSessionsWhere = (matches: (auth: AuthContext) => boolean): void => {
+    for (const connection of [...connections.values()]) {
+      if (matches(connection.auth)) endSession(connection, CLOSE_REASON_SESSION_ENDED);
+    }
   };
 
   const runHeartbeat = (): void => {
@@ -175,10 +242,14 @@ export const createRealtimeGateway = (deps: RealtimeGatewayDependencies): Realti
     if (connections.size === 0) stopHeartbeat();
   }
 
-  const handleSubscribe = async (connection: Connection, topic: RealtimeTopic): Promise<void> => {
+  /**
+   * Answers a subscribe that needs no authorisation check: one already held,
+   * or one over the limit. Returns whether it answered.
+   */
+  const settledWithoutCheck = (connection: Connection, topic: RealtimeTopic): boolean => {
     if (connection.topics.has(topic)) {
       send(connection, { type: 'subscribed', topic });
-      return;
+      return true;
     }
 
     if (connection.topics.size >= options.maxSubscriptionsPerConnection) {
@@ -187,8 +258,14 @@ export const createRealtimeGateway = (deps: RealtimeGatewayDependencies): Realti
         REALTIME_ERROR_CODES.subscriptionLimit,
         `A connection may hold at most ${String(options.maxSubscriptionsPerConnection)} subscriptions`,
       );
-      return;
+      return true;
     }
+
+    return false;
+  };
+
+  const handleSubscribe = async (connection: Connection, topic: RealtimeTopic): Promise<void> => {
+    if (settledWithoutCheck(connection, topic)) return;
 
     let allowed = false;
     try {
@@ -208,8 +285,10 @@ export const createRealtimeGateway = (deps: RealtimeGatewayDependencies): Realti
       return;
     }
 
-    // The connection may have been dropped while the async check was running.
+    // The connection may have been dropped while the async check was running,
+    // and the registry is read again rather than trusted from before the await.
     if (!connections.has(connection.id)) return;
+    if (settledWithoutCheck(connection, topic)) return;
 
     connection.topics.add(topic);
     const subscribers = topicIndex.get(topic) ?? new Set<Connection>();
@@ -234,48 +313,98 @@ export const createRealtimeGateway = (deps: RealtimeGatewayDependencies): Realti
     send(connection, { type: 'unsubscribed', topic });
   };
 
-  const handleMessage = (connection: Connection, data: RawSocketData): void => {
-    const parsed = readInboundFrame(data, options.maxInboundMessageBytes);
-
+  /**
+   * Answers one frame. Only a subscribe has to wait (for its authorisation
+   * check); everything else is answered before this returns.
+   */
+  const handleFrame = (
+    connection: Connection,
+    parsed: InboundParseResult,
+  ): Promise<void> | undefined => {
     if (!parsed.ok) {
       sendError(connection, parsed.code, parsed.reason);
-      return;
+      return undefined;
     }
 
     const message = parsed.message;
 
     if (message.type === 'ping') {
       send(connection, { type: 'pong' });
-      return;
+      return undefined;
     }
 
     if (message.type === 'unsubscribe') {
       handleUnsubscribe(connection, message.topic);
-      return;
+      return undefined;
     }
 
-    // Inbound handling must never reject: an unhandled rejection here would
-    // take down the process on a malformed client message.
-    void handleSubscribe(connection, message.topic).catch((error: unknown) => {
-      logger.error({ err: error, connectionId: connection.id }, 'Subscribe handling failed');
-      sendError(connection, REALTIME_ERROR_CODES.internal, 'Subscription could not be processed');
-    });
+    return handleSubscribe(connection, message.topic);
   };
 
-  const handleConnection = (socket: RealtimeSocket, auth: AuthContext): void => {
+  /**
+   * Works through the queue one frame at a time. A frame that needs no await
+   * is answered on the spot, so an idle connection answers synchronously; a
+   * subscribe holds back the frames behind it until its check has settled.
+   */
+  const drainInbound = async (connection: Connection): Promise<void> => {
+    connection.draining = true;
+    try {
+      let next = connection.inbound.shift();
+      while (next !== undefined) {
+        // A frame queued behind one that ended the connection has nobody to answer.
+        if (!connections.has(connection.id)) {
+          connection.inbound.length = 0;
+          return;
+        }
+        try {
+          const pending = handleFrame(connection, next);
+          if (pending) await pending;
+        } catch (error) {
+          // Handling must never reject: an unhandled rejection here would take
+          // down the process on a malformed client message, and a failed frame
+          // must not stall the ones behind it.
+          logger.error(
+            { err: error, connectionId: connection.id },
+            'Inbound frame handling failed',
+          );
+          sendError(
+            connection,
+            REALTIME_ERROR_CODES.internal,
+            'Subscription could not be processed',
+          );
+        }
+        next = connection.inbound.shift();
+      }
+    } finally {
+      connection.draining = false;
+    }
+  };
+
+  const enqueueFrame = (connection: Connection, data: RawSocketData): void => {
+    // Parsed on arrival, so the queue holds small validated messages rather
+    // than raw frames of any size.
+    connection.inbound.push(readInboundFrame(data, options.maxInboundMessageBytes));
+    if (!connection.draining) void drainInbound(connection);
+  };
+
+  const handleConnection = (socket: RealtimeSocket, auth: RealtimeIdentity): void => {
     const connection: Connection = {
       id: randomUUID(),
       socket,
       auth,
       topics: new Set<RealtimeTopic>(),
       isAlive: true,
+      inbound: [],
+      draining: false,
+      expiry: null,
     };
 
     connections.set(connection.id, connection);
     startHeartbeat();
+    armExpiry(connection);
 
     socket.on('message', (data) => {
-      handleMessage(connection, data);
+      enqueueFrame(connection, data);
     });
     socket.on('pong', () => {
       connection.isAlive = true;
@@ -317,7 +446,7 @@ export const createRealtimeGateway = (deps: RealtimeGatewayDependencies): Realti
     const server = wsServer;
 
     void (async (): Promise<void> => {
-      let auth: AuthContext;
+      let auth: RealtimeIdentity;
       try {
         auth = await verifyAccessToken(token);
       } catch (error) {
@@ -393,6 +522,18 @@ export const createRealtimeGateway = (deps: RealtimeGatewayDependencies): Realti
       }
     },
 
+    sessionsRevoked(sessionIds: readonly string[]): void {
+      // Identifiers are compared without regard to case, as the database does.
+      const ended = new Set(sessionIds.map((sessionId) => sessionId.toLowerCase()));
+      if (ended.size === 0) return;
+      endSessionsWhere((auth) => ended.has(auth.sessionId.toLowerCase()));
+    },
+
+    userSessionsRevoked(userId: string): void {
+      const ended = userId.toLowerCase();
+      endSessionsWhere((auth) => auth.userId.toLowerCase() === ended);
+    },
+
     handleConnection,
 
     getStats(): RealtimeGatewayStats {
@@ -412,6 +553,7 @@ export const createRealtimeGateway = (deps: RealtimeGatewayDependencies): Realti
       upgradeListener = null;
 
       for (const connection of [...connections.values()]) {
+        clearExpiry(connection);
         unsubscribeAll(connection);
         try {
           connection.socket.close(CLOSE_CODE_GOING_AWAY, 'Server shutting down');
