@@ -1,5 +1,6 @@
+import { MAX_PAGE } from '../../common/query/pagination.js';
 import { z } from 'zod';
-import { contactSortFields, MAX_CONTACT_PAGE } from './types.js';
+import { contactSortFields } from './types.js';
 
 const idParams = z.object({ id: z.string().uuid() });
 const email = z
@@ -12,7 +13,7 @@ const phone = z.string().trim().min(1).max(32);
 
 export const listContactsSchema = z.object({
   query: z.object({
-    page: z.coerce.number().int().min(1).max(MAX_CONTACT_PAGE).default(1),
+    page: z.coerce.number().int().min(1).max(MAX_PAGE).default(1),
     pageSize: z.coerce.number().int().min(1).max(100).default(20),
     search: z.string().trim().min(1).max(160).optional(),
     ownerId: z.string().uuid().optional(),

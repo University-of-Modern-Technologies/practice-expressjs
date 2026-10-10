@@ -1,10 +1,11 @@
+import { MAX_PAGE } from '../../common/query/pagination.js';
 import { z } from 'zod';
 
 const optionalDate = z.iso.datetime({ offset: true }).optional();
 
 export const listAuditSchema = z.object({
   query: z.object({
-    page: z.coerce.number().int().min(1).default(1),
+    page: z.coerce.number().int().min(1).max(MAX_PAGE).default(1),
     pageSize: z.coerce.number().int().min(1).max(100).default(25),
     actorId: z.uuid().optional(),
     action: z.string().trim().min(1).max(64).optional(),
@@ -21,7 +22,7 @@ export const auditHistorySchema = z.object({
     resourceId: z.uuid(),
   }),
   query: z.object({
-    page: z.coerce.number().int().min(1).default(1),
+    page: z.coerce.number().int().min(1).max(MAX_PAGE).default(1),
     pageSize: z.coerce.number().int().min(1).max(100).default(25),
     action: z.string().trim().min(1).max(64).optional(),
     createdFrom: optionalDate,

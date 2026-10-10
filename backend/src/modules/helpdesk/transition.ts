@@ -27,6 +27,23 @@ export const assertTicketStatusTransition = (from: TicketStatus, to: TicketStatu
 };
 
 /**
+ * A status the lifecycle never leaves. Only `CLOSED` today: a resolved ticket
+ * may still be reopened, so it stays editable.
+ */
+export const isFinalTicketStatus = (status: TicketStatus): boolean =>
+  ticketState(status).allowedTransitions.length === 0;
+
+/**
+ * A closed ticket is the record of a conversation that is over; a follow-up is
+ * a new ticket. Its fields are therefore frozen, so the history the reports and
+ * the customer saw cannot be rewritten afterwards.
+ */
+export const assertTicketEditable = (status: TicketStatus): void => {
+  if (!isFinalTicketStatus(status)) return;
+  throw new AppError('A closed ticket cannot be edited', 409, 'TICKET_CLOSED', { status });
+};
+
+/**
  * What to write into `resolvedAt` for a ticket that has just reached
  * `status`: the moment it was resolved, `null` once it is back in somebody's
  * hands, and `undefined` when the status has no opinion, which tells the

@@ -436,17 +436,21 @@ describe('analytics stock health', () => {
 });
 
 describe('analytics regressions', () => {
-  // Buckets are cut on the UTC calendar whatever the session's zone.
-  it('truncates the sales buckets in UTC, named explicitly', async () => {
+  // Buckets are cut on a calendar named explicitly, whatever the
+  // session's zone — and that calendar is Kyiv's, where the day boundaries of
+  // every report lie.
+  it('truncates the sales buckets on the Kyiv calendar, named explicitly', async () => {
     const harness = createHarness();
     const service = createAnalyticsService(harness.db, createRecordingCache());
 
     await service.salesSummary({ ...range, period: 'day' });
 
-    const text = lastSql(harness.queryRaw).strings.join('');
-    expect(text).toContain(
-      "COALESCE(o.placed_at, o.created_at) AT TIME ZONE 'UTC') AT TIME ZONE 'UTC' AS bucket_start",
+    const sql = lastSql(harness.queryRaw);
+    expect(sql.strings.join('?')).toContain(
+      'COALESCE(o.placed_at, o.created_at) AT TIME ZONE ?::text) AT TIME ZONE ?::text AS bucket_start',
     );
+    expect(sql.values.filter((value) => value === 'Europe/Kyiv')).toHaveLength(2);
+    expect(sql.strings.join('')).not.toContain("'UTC'");
   });
 
   // Equal revenue at the cut is broken by the product id in the query.

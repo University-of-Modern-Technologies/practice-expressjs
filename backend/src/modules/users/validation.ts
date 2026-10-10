@@ -1,3 +1,4 @@
+import { MAX_PAGE } from '../../common/query/pagination.js';
 import { z } from 'zod';
 
 import { passwordSchema } from '../auth/validation.js';
@@ -7,7 +8,7 @@ const roleIdsSchema = z.array(z.string().uuid()).min(1).max(20);
 
 export const listUsersSchema = z.object({
   query: z.object({
-    page: z.coerce.number().int().min(1).default(1),
+    page: z.coerce.number().int().min(1).max(MAX_PAGE).default(1),
     pageSize: z.coerce.number().int().min(1).max(100).default(20),
   }),
 });

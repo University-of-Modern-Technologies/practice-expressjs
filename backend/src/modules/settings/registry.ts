@@ -1,3 +1,4 @@
+import { describeValidationIssues } from '../../common/errors/index.js';
 import { z } from 'zod';
 
 import { AppError } from '../../common/errors/app-error.js';
@@ -98,7 +99,7 @@ export const parseSettingValue = <K extends SettingKey>(
       `Invalid value for setting ${key}`,
       400,
       'INVALID_SETTING_VALUE',
-      z.flattenError(result.error),
+      describeValidationIssues(result.error),
     );
   }
   return result.data;

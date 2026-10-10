@@ -24,6 +24,7 @@ export const createAuthenticate =
   async (request, _response, next) => {
     const token = bearerToken(request.header('authorization'));
     if (token === null) throw new AppError('Unauthorized', 401, 'UNAUTHORIZED');
-    request.auth = await authService.authenticate(token);
+    const { userId, sessionId } = await authService.authenticate(token);
+    request.auth = { userId, sessionId };
     next();
   };

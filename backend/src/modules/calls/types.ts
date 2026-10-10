@@ -83,13 +83,6 @@ export const callRecordingSchema = z.object({
 
 export type CallRecordingDto = Readonly<z.infer<typeof callRecordingSchema>>;
 
-/**
- * Highest page a list request may ask for: far beyond any real call log, and
- * low enough that the row offset it implies stays a small integer for the
- * database instead of making the query itself fail.
- */
-export const MAX_CALL_PAGE = 1_000_000;
-
 export const callSortFields = ['startedAt', 'createdAt', 'durationSeconds'] as const;
 export type CallSortField = (typeof callSortFields)[number];
 

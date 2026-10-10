@@ -2,6 +2,7 @@ import { describe, expect, it, jest } from '@jest/globals';
 import bcrypt from 'bcryptjs';
 
 import type { AuditEvent } from '../audit/types.js';
+import type { SessionRevocationListener } from '../auth/types.js';
 import type { Actor } from '../rbac/types.js';
 import { createUsersService, type AuditRecorder, type UsersDatabase } from './service.js';
 
@@ -89,19 +90,34 @@ const createHarness = ({
     }),
   };
   const permissions = { invalidateUserPermissions: jest.fn(async (_userId: string) => undefined) };
+  let committed = false;
+  /** Every notice, with whether the transaction behind it had committed by then. */
+  const notices: Array<{ readonly ended: string; readonly committed: boolean }> = [];
+  const sessions: SessionRevocationListener = {
+    sessionsRevoked: (sessionIds) => {
+      for (const sessionId of sessionIds)
+        notices.push({ ended: `session:${sessionId}`, committed });
+    },
+    userSessionsRevoked: (userId) => {
+      notices.push({ ended: `user:${userId}`, committed });
+    },
+  };
   const db = {
     user: { findUnique: transaction.user.findUnique },
     session: { findMany: jest.fn(async () => [session]) },
-    $transaction: jest.fn(async (callback: (client: typeof transaction) => Promise<unknown>) =>
-      callback(transaction),
-    ),
+    $transaction: jest.fn(async (callback: (client: typeof transaction) => Promise<unknown>) => {
+      const result = await callback(transaction);
+      committed = true;
+      return result;
+    }),
   } as unknown as UsersDatabase;
 
   return {
-    service: createUsersService(db, permissions, audit),
+    service: createUsersService(db, permissions, audit, sessions),
     transaction,
     events,
     permissions,
+    notices,
   };
 };
 
@@ -469,5 +485,58 @@ describe('users service permission cache invalidation', () => {
       code: 'USER_NOT_FOUND',
     });
     expect(permissions.invalidateUserPermissions).not.toHaveBeenCalled();
+  });
+});
+
+// A socket opened with a session must not outlive it.
+describe('users service tells realtime about sessions it ended', () => {
+  it('names the revoked session, once the revocation has committed', async () => {
+    const { service, notices } = createHarness();
+
+    await service.revokeSession(actor, 'user-1', 'session-1');
+
+    expect(notices).toEqual([{ ended: 'session:session-1', committed: true }]);
+  });
+
+  it('says nothing about a session that was already revoked', async () => {
+    const { service, notices } = createHarness({
+      session: sessionRecord({ revokedAt: new Date('2026-01-02T00:00:00Z') }),
+    });
+
+    await service.revokeSession(actor, 'user-1', 'session-1');
+
+    expect(notices).toEqual([]);
+  });
+
+  it('ends every session of a disabled user, once the change has committed', async () => {
+    const { service, notices } = createHarness();
+
+    await service.disable(actor, 'user-1');
+
+    expect(notices).toEqual([{ ended: 'user:user-1', committed: true }]);
+  });
+
+  it('ends every session of a user whose password changed', async () => {
+    const { service, notices } = createHarness();
+
+    await service.update(actor, 'user-1', { password: 'new-password-1' });
+
+    expect(notices).toEqual([{ ended: 'user:user-1', committed: true }]);
+  });
+
+  it('ends nothing when the password is kept', async () => {
+    const { service, notices } = createHarness();
+
+    await service.update(actor, 'user-1', { name: 'Renamed' });
+
+    expect(notices).toEqual([]);
+  });
+
+  it('ends nothing when the change is refused', async () => {
+    const { service, notices } = createHarness({ existing: adminRecord(), otherActiveAdmins: 0 });
+
+    await expect(service.disable(actor, 'user-1')).rejects.toMatchObject({ statusCode: 409 });
+
+    expect(notices).toEqual([]);
   });
 });

@@ -27,7 +27,8 @@ import {
 } from './validation.js';
 
 const rangeNote =
-  `Проміжок за замовчуванням — ${DEFAULT_REPORT_WINDOW_LABEL}; \`from\` має бути раніше за \`to\`, ` +
+  `Проміжок за замовчуванням — ${DEFAULT_REPORT_WINDOW_LABEL}; межі доби — за київським часом; ` +
+  `\`from\` має бути раніше за \`to\`, ` +
   `а вікно не може перевищувати ${String(MAX_REPORT_WINDOW_DAYS)} днів.`;
 
 const salesSummaryQuery = salesSummarySchema.shape.query.in.shape;

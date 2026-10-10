@@ -1,5 +1,6 @@
+import { MAX_PAGE } from '../../common/query/pagination.js';
 import { z } from 'zod';
-import { callDirections, callDispositions, callSortFields, MAX_CALL_PAGE } from './types.js';
+import { callDirections, callDispositions, callSortFields } from './types.js';
 
 const idParams = z.object({ id: z.string().uuid() });
 const timestamp = z.string().datetime({ offset: true });
@@ -15,7 +16,7 @@ const boolean = z
 export const listCallsSchema = z.object({
   query: z
     .object({
-      page: z.coerce.number().int().min(1).max(MAX_CALL_PAGE).default(1),
+      page: z.coerce.number().int().min(1).max(MAX_PAGE).default(1),
       pageSize: z.coerce.number().int().min(1).max(100).default(20),
       search: z.string().trim().min(1).max(160).optional(),
       direction: z.enum(callDirections).optional(),

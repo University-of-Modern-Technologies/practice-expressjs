@@ -10,7 +10,7 @@ import {
 } from '../../common/types/domain-event-publisher.js';
 import type { Prisma, PrismaDatabase, PrismaTransaction } from '../../db/prisma.js';
 import type { AuditService } from '../audit/service.js';
-import { assertTicketStatusTransition, resolutionFor } from './transition.js';
+import { assertTicketEditable, assertTicketStatusTransition, resolutionFor } from './transition.js';
 import type {
   CreateTicketData,
   TicketAccess,
@@ -318,6 +318,9 @@ export const createHelpdeskService = (
       const result = await db.$transaction(async (transaction) => {
         const existing = await findActive(transaction.ticket, access, id);
         assertCurrentVersion(existing.version, data.version);
+        // Only the fields are frozen; whether a closed ticket may still move is
+        // the lifecycle's decision, not this one's.
+        assertTicketEditable(existing.status);
         const ownerId = data.ownerId ?? existing.ownerId;
         ensureOwnerAccess(access, ownerId);
         await assertOwnerExists(transaction, data.ownerId);
