@@ -8,7 +8,11 @@ import {
 } from '../../common/types/domain-event-publisher.js';
 import type { Prisma, PrismaDatabase, PrismaTransaction } from '../../db/prisma.js';
 import type { AuditService } from '../audit/service.js';
-import { assertDealProbability, assertDealStageTransition } from './transition.js';
+import {
+  assertDealEditable,
+  assertDealProbability,
+  assertDealStageTransition,
+} from './transition.js';
 import type {
   CreateDealData,
   DealAccess,
@@ -20,8 +24,9 @@ import type {
   UpdateDealData,
 } from './types.js';
 
-interface DealRecord extends Omit<DealDto, 'amount'> {
+interface DealRecord extends Omit<DealDto, 'amount' | 'expectedCloseDate'> {
   readonly amount: { toString(): string } | string | number;
+  readonly expectedCloseDate: Date | null;
   readonly deletedAt: Date | null;
 }
 
@@ -54,12 +59,21 @@ const dealSelection = {
   deletedAt: true,
 };
 
-const toDto = ({ amount, deletedAt: _deletedAt, ...deal }: DealRecord): DealDto => ({
+const toDate = (value: string): Date => new Date(`${value}T00:00:00.000Z`);
+
+/** The calendar day a `DATE` column holds; the driver hands it back as UTC midnight. */
+const toDateOnly = (value: Date): string => value.toISOString().slice(0, 10);
+
+const toDto = ({
+  amount,
+  expectedCloseDate,
+  deletedAt: _deletedAt,
+  ...deal
+}: DealRecord): DealDto => ({
   ...deal,
   amount: amount.toString(),
+  expectedCloseDate: expectedCloseDate ? toDateOnly(expectedCloseDate) : null,
 });
-
-const toDate = (value: string): Date => new Date(`${value}T00:00:00.000Z`);
 
 /**
  * A search term is matched literally. The filter becomes `LIKE`, where `%` and
@@ -93,6 +107,24 @@ const assertInitialStage = (stage: DealStage | undefined): void => {
     );
   }
 };
+
+/**
+ * The organization keeps its books in one currency. A deal in another one would
+ * be added to the same pipeline totals as if the units were the same, so it is
+ * refused rather than converted at a rate nobody chose.
+ */
+const assertOrganizationCurrency = (currency: string, expected: string): void => {
+  if (currency === expected) return;
+  throw new AppError(
+    `Deals are kept in the organization currency ${expected}`,
+    422,
+    'CURRENCY_NOT_SUPPORTED',
+    { currency, expected },
+  );
+};
+
+/** Used until the composition root supplies the organization's own setting. */
+export const DEFAULT_ORGANIZATION_CURRENCY = 'USD';
 
 const isRecordNotFoundError = (error: unknown): boolean =>
   typeof error === 'object' && error !== null && 'code' in error && error.code === 'P2025';
@@ -157,13 +189,28 @@ const assertContactAccess = async (
   if (!contact) throw new AppError('Contact not found', 404, 'CONTACT_NOT_FOUND');
 };
 
+export interface DealsServiceDependencies {
+  /**
+   * The currency the organization keeps its books in (`organization.defaultCurrency`).
+   * Read on every write rather than once, so a changed setting applies to the
+   * next deal without a restart.
+   */
+  readonly resolveOrganizationCurrency?: (() => Promise<string>) | undefined;
+}
+
 export const createDealsService = (
   db: DealsDatabase,
   audit: AuditService,
   // Secondary consumers (event stream, realtime channel) are notified only once
   // the transaction has committed, so they can never affect its outcome.
   events: DomainEventPublisher = noopDomainEventPublisher,
+  {
+    resolveOrganizationCurrency = () => Promise.resolve(DEFAULT_ORGANIZATION_CURRENCY),
+  }: DealsServiceDependencies = {},
 ): DealsService => {
+  const organizationCurrency = async (): Promise<string> =>
+    (await resolveOrganizationCurrency()).toUpperCase();
+
   /**
    * The publisher contract forbids throwing, but the primary path is guarded
    * anyway: a change that is already committed must be reported as a success
@@ -212,6 +259,9 @@ export const createDealsService = (
       const stage = 'LEAD';
       const probability = data.probability ?? defaultProbability[stage];
       assertDealProbability(stage, probability);
+      const expectedCurrency = await organizationCurrency();
+      const currency = data.currency ?? expectedCurrency;
+      assertOrganizationCurrency(currency, expectedCurrency);
       const created = await db.$transaction(async (transaction) => {
         await assertOwnerExists(transaction, data.ownerId);
         await assertContactAccess(transaction, access, data.contactId);
@@ -222,7 +272,7 @@ export const createDealsService = (
             title: data.title,
             stage,
             amount: data.amount,
-            currency: data.currency ?? 'USD',
+            currency,
             probability,
             expectedCloseDate: data.expectedCloseDate ? toDate(data.expectedCloseDate) : null,
             closedAt: null,
@@ -254,9 +304,15 @@ export const createDealsService = (
 
     async update(access, id, data) {
       if (data.amount !== undefined) assertAmount(data.amount);
+      if (data.currency !== undefined) {
+        assertOrganizationCurrency(data.currency, await organizationCurrency());
+      }
       const result = await db.$transaction(async (transaction) => {
         const existing = await findActive(transaction.deal, access, id);
         assertCurrentVersion(existing.version, data.version);
+        // Only the fields are frozen; the stage machine decides on its own
+        // whether a closed deal may still move.
+        assertDealEditable(existing.stage);
         const ownerId = data.ownerId ?? existing.ownerId;
         ensureOwnerAccess(access, ownerId);
         await assertOwnerExists(transaction, data.ownerId);

@@ -6,6 +6,7 @@ import {
   MATCH_WINDOW_DAYS,
   amountsAgree,
   bookedWithinWindow,
+  currenciesAgree,
   candidatePlacementWindow,
   counterpartyMatchesContact,
   findMatchCandidates,
@@ -26,6 +27,7 @@ const order: MatchableOrder = {
   orderNumber: 'ORD-2026-0001',
   status: 'CONFIRMED',
   total: '1800.00',
+  currency: 'USD',
   placedAt: orderPlacedAt,
   contactName: 'Alex North',
   contactCompany: 'Northwind Workshop',
@@ -33,6 +35,7 @@ const order: MatchableOrder = {
 
 const payment: MatchableTransaction = {
   amount: '1800.00',
+  currency: 'USD',
   bookedAt: new Date('2026-01-05T10:00:00.000Z'),
   direction: 'CREDIT',
   counterpartyName: 'Northwind Workshop',
@@ -63,6 +66,14 @@ describe('reconciliation conditions', () => {
     expect(amountsAgree('1800.01', '1800.00')).toBe(true);
     expect(amountsAgree('1799.98', '1800.00')).toBe(false);
     expect(amountsAgree('1800.02', '1800.00')).toBe(false);
+  });
+
+  // The same number in another currency is a different amount of money.
+  it('never settles an order with a payment in another currency', () => {
+    expect(currenciesAgree('USD', 'USD')).toBe(true);
+    expect(currenciesAgree('USD', 'EUR')).toBe(false);
+    expect(isMatchCandidate({ ...payment, currency: 'EUR' }, order)).toBe(false);
+    expect(findMatchCandidates({ ...payment, currency: 'EUR' }, [order])).toEqual([]);
   });
 
   it('opens the window at the order and shuts it ninety days later', () => {

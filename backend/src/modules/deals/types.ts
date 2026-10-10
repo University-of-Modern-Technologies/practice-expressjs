@@ -23,7 +23,9 @@ export const dealSchema = z
     currency: currencyCodeSchema,
     probability: z.int().min(0).max(100),
     version: versionNumberSchema,
-    expectedCloseDate: z.date().nullable(),
+    // A calendar day, not an instant: it is the same day for everybody who
+    // reads it, so it travels as `YYYY-MM-DD` both ways.
+    expectedCloseDate: z.iso.date().nullable(),
     closedAt: z.date().nullable(),
     createdAt: z.date(),
     updatedAt: z.date(),
@@ -65,13 +67,6 @@ export interface TransitionDealData {
   readonly stage: DealStage;
   readonly probability?: number | undefined;
 }
-
-/**
- * Highest page a list request may ask for: far beyond any real pipeline, and
- * low enough that the row offset it implies stays a small integer for the
- * database instead of making the query itself fail.
- */
-export const MAX_DEAL_PAGE = 1_000_000;
 
 export const dealSortFields = [
   'createdAt',

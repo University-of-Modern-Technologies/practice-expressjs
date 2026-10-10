@@ -61,6 +61,13 @@ const bankTransactionShape = {
     .meta({ description: 'Заповнене тоді й лише тоді, коли matchStatus = MATCHED.' }),
   matchedAt: z.date().nullable(),
   matchedById: z.uuid().nullable(),
+  // Set when a person takes a match back; automatic reconciliation skips the
+  // row until a person matches it again by hand.
+  autoMatchDisabled: z.boolean().meta({
+    description:
+      'true, якщо зведення зняли вручну: автозведення цей рядок пропускає, доки його ' +
+      'не зведуть вручну знову.',
+  }),
   version: versionNumberSchema,
   createdAt: z.date(),
   updatedAt: z.date(),
