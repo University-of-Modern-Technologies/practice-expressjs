@@ -44,7 +44,13 @@ const movementRow = {
   createdAt: new Date('2026-01-02T00:00:00Z'),
 };
 
-const createHarness = () => {
+interface LedgerRow {
+  readonly warehouseId: string;
+  readonly type: string;
+  readonly quantity: number;
+}
+
+const createHarness = (movements: readonly LedgerRow[] = []) => {
   const updateLevel = jest.fn(async (_args: unknown) => ({
     ...stockLevel,
     quantityReserved: 6,
@@ -58,7 +64,7 @@ const createHarness = () => {
       update: updateLevel,
       create: jest.fn(),
     },
-    stockMovement: { create: createMovement },
+    stockMovement: { create: createMovement, findMany: jest.fn(async () => movements) },
     auditLog: { create: jest.fn() },
   } as unknown as WarehouseTransaction;
 
@@ -141,6 +147,55 @@ describe('stock operations on a caller-supplied transaction', () => {
     expect(harness.publish).not.toHaveBeenCalled();
   });
 
+  it('treats a repeated reservation of an order line as a no-op', async () => {
+    const harness = createHarness([{ warehouseId, type: 'RESERVATION', quantity: 2 }]);
+
+    const change = await harness.operations.reserve(harness.transaction, access, reserveInput);
+    change.publishCommitted();
+
+    expect(change.movement).toBeNull();
+    expect(change.level.quantityReserved).toBe(stockLevel.quantityReserved);
+    expect(harness.updateLevel).not.toHaveBeenCalled();
+    expect(harness.createMovement).not.toHaveBeenCalled();
+    expect(harness.publish).not.toHaveBeenCalled();
+  });
+
+  it('reserves an order line again once the earlier reservation was given back', async () => {
+    const harness = createHarness([
+      { warehouseId, type: 'RESERVATION', quantity: 2 },
+      { warehouseId, type: 'RELEASE', quantity: 2 },
+    ]);
+
+    const change = await harness.operations.reserve(harness.transaction, access, reserveInput);
+
+    expect(change.movement).not.toBeNull();
+    expect(harness.updateLevel).toHaveBeenCalledTimes(1);
+  });
+
+  it('lets the order reserve under its own reference on the order transaction', async () => {
+    const harness = createHarness();
+
+    await harness.operations.reserve(harness.transaction, access, reserveInput);
+
+    expect(harness.createMovement).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ type: 'RESERVATION', referenceType: 'order' }) as unknown,
+      }),
+    );
+  });
+
+  it('lets the order release its own reservation on the order transaction', async () => {
+    const harness = createHarness();
+
+    await harness.operations.release(harness.transaction, access, reserveInput);
+
+    expect(harness.createMovement).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ type: 'RELEASE', referenceType: 'order' }) as unknown,
+      }),
+    );
+  });
+
   it('releases reserved units back without touching the quantity on hand', async () => {
     const harness = createHarness();
 
@@ -162,11 +217,34 @@ describe('stock operations on a caller-supplied transaction', () => {
       fromReservation: true,
     });
 
-    expect(harness.updateLevel).toHaveBeenCalledWith(
+    // Released first, then issued: the ledger records both halves.
+    expect(harness.updateLevel).toHaveBeenNthCalledWith(
+      1,
       expect.objectContaining({
-        data: expect.objectContaining({ quantityOnHand: 6, quantityReserved: 0 }) as unknown,
+        data: expect.objectContaining({ quantityOnHand: 10, quantityReserved: 0 }) as unknown,
       }),
     );
+    expect(harness.createMovement.mock.calls.map(([args]) => args)).toEqual([
+      expect.objectContaining({ data: expect.objectContaining({ type: 'RELEASE', quantity: 4 }) }),
+      expect.objectContaining({ data: expect.objectContaining({ type: 'ISSUE', quantity: 4 }) }),
+    ]);
+  });
+
+  it('publishes the release and the issue only when the caller says it committed', async () => {
+    const harness = createHarness();
+
+    const change = await harness.operations.issue(harness.transaction, access, {
+      ...reserveInput,
+      quantity: 4,
+      fromReservation: true,
+    });
+    expect(harness.publish).not.toHaveBeenCalled();
+    change.publishCommitted();
+
+    expect(harness.publish.mock.calls.map(([event]) => event.eventType)).toEqual([
+      'stock.released',
+      'stock.issued',
+    ]);
   });
 
   it('satisfies the stock port that the orders module declares', () => {

@@ -94,6 +94,30 @@ const mapPersistenceError = (error: unknown): never => {
   throw error;
 };
 
+/**
+ * Reads the organisation's single currency on the product's own transaction.
+ * Optional: without it the catalogue is kept in USD.
+ */
+export type OrganizationCurrencyResolver = (transaction: PrismaTransaction) => Promise<string>;
+
+export interface ProductsServiceDependencies {
+  readonly resolveOrganizationCurrency?: OrganizationCurrencyResolver | undefined;
+}
+
+export const FALLBACK_ORGANIZATION_CURRENCY = 'USD';
+
+/** A catalogue in two currencies would price orders in money the books do not keep. */
+const assertOrganizationCurrency = (currency: string, expected: string): void => {
+  if (currency !== expected) {
+    throw new AppError(
+      'Only the organisation currency is accepted',
+      422,
+      'CURRENCY_NOT_SUPPORTED',
+      { currency, expected },
+    );
+  }
+};
+
 const isSkuTaken = (error: unknown): boolean =>
   error instanceof AppError && error.code === 'PRODUCT_SKU_TAKEN';
 
@@ -119,7 +143,13 @@ export const createProductsService = (
   // Secondary consumers (event stream, realtime channel) are notified only once
   // the transaction has committed, so they can never affect its outcome.
   events: DomainEventPublisher = noopDomainEventPublisher,
+  dependencies: ProductsServiceDependencies = {},
 ): ProductsService => {
+  const resolveCurrency = async (transaction: PrismaTransaction): Promise<string> =>
+    dependencies.resolveOrganizationCurrency
+      ? dependencies.resolveOrganizationCurrency(transaction)
+      : FALLBACK_ORGANIZATION_CURRENCY;
+
   /**
    * The publisher contract forbids throwing, but the primary path is guarded
    * anyway: a change that is already committed must be reported as a success
@@ -179,6 +209,9 @@ export const createProductsService = (
       assertUnitPrice(data.unitPrice);
       const created = await db
         .$transaction(async (transaction) => {
+          const expected = await resolveCurrency(transaction);
+          const currency = data.currency ?? expected;
+          assertOrganizationCurrency(currency, expected);
           let product: ProductRecord;
           try {
             product = await transaction.product.create({
@@ -188,7 +221,7 @@ export const createProductsService = (
                 description: data.description ?? null,
                 category: data.category ?? null,
                 unitPrice: data.unitPrice,
-                currency: data.currency ?? 'USD',
+                currency,
                 isActive: data.isActive ?? true,
               },
               select: productSelection,
@@ -228,6 +261,9 @@ export const createProductsService = (
       const result = await db.$transaction(async (transaction) => {
         const existing = await findActive(transaction.product, id);
         assertCurrentVersion(existing.version, data.version);
+        if (data.currency !== undefined) {
+          assertOrganizationCurrency(data.currency, await resolveCurrency(transaction));
+        }
         const updateData: Prisma.ProductUncheckedUpdateInput = {
           ...(data.name !== undefined ? { name: data.name } : {}),
           ...(data.description !== undefined ? { description: data.description } : {}),

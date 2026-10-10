@@ -1,3 +1,4 @@
+import { MAX_PAGE } from '../../common/query/pagination.js';
 import { z } from 'zod';
 import { orderSortFields, orderStatuses } from './types.js';
 
@@ -25,7 +26,7 @@ const orderItemInput = z.object({
 export const listOrdersSchema = z.object({
   query: z
     .object({
-      page: z.coerce.number().int().min(1).default(1),
+      page: z.coerce.number().int().min(1).max(MAX_PAGE).default(1),
       pageSize: z.coerce.number().int().min(1).max(100).default(20),
       search: z.string().trim().min(1).max(64).optional(),
       ownerId: z.string().uuid().optional(),

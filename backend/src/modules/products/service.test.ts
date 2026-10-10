@@ -29,6 +29,8 @@ interface HarnessOptions {
   readonly update?: (args: unknown) => Promise<unknown>;
   /** What a lookup by SKU finds once an insert has been refused. */
   readonly skuHolder?: { readonly deletedAt: Date | null } | null;
+  /** The organisation's currency; left out, the service falls back to USD. */
+  readonly organizationCurrency?: string;
 }
 
 const createHarness = (options: HarnessOptions = {}) => {
@@ -64,8 +66,18 @@ const createHarness = (options: HarnessOptions = {}) => {
   const publish = jest.fn((_event: DomainEventNotification): void => undefined);
   const events: DomainEventPublisher = { publish };
 
+  const resolveOrganizationCurrency = jest.fn(
+    async (_transaction: unknown) => options.organizationCurrency ?? 'USD',
+  );
+
   return {
-    service: createProductsService(db, audit, events),
+    service: createProductsService(
+      db,
+      audit,
+      events,
+      options.organizationCurrency === undefined ? {} : { resolveOrganizationCurrency },
+    ),
+    resolveOrganizationCurrency,
     db,
     findFirst,
     findBySku,
@@ -322,6 +334,55 @@ describe('products service search', () => {
           ],
         }) as unknown,
       }),
+    );
+  });
+});
+
+describe('products service organisation currency', () => {
+  it('prices a new product in the organisation currency when none is given', async () => {
+    const harness = createHarness({ organizationCurrency: 'EUR' });
+
+    await harness.service.create(access, validProduct);
+
+    expect(harness.createProduct).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ currency: 'EUR' }) as unknown }),
+    );
+  });
+
+  it('refuses a product priced in another currency', async () => {
+    const harness = createHarness({ organizationCurrency: 'EUR' });
+
+    await expect(
+      harness.service.create(access, { ...validProduct, currency: 'USD' }),
+    ).rejects.toMatchObject({
+      statusCode: 422,
+      code: 'CURRENCY_NOT_SUPPORTED',
+      details: { currency: 'USD', expected: 'EUR' },
+    });
+    expect(harness.createProduct).not.toHaveBeenCalled();
+  });
+
+  it('refuses to move a product to another currency', async () => {
+    const harness = createHarness();
+
+    await expect(
+      harness.service.update(access, activeProduct.id, { version: 1, currency: 'EUR' }),
+    ).rejects.toMatchObject({
+      statusCode: 422,
+      code: 'CURRENCY_NOT_SUPPORTED',
+      details: { currency: 'EUR', expected: 'USD' },
+    });
+    expect(harness.updateProduct).not.toHaveBeenCalled();
+  });
+
+  it('keeps USD as the catalogue currency when no setting is wired', async () => {
+    const harness = createHarness();
+
+    await harness.service.create(access, validProduct);
+
+    expect(harness.resolveOrganizationCurrency).not.toHaveBeenCalled();
+    expect(harness.createProduct).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ currency: 'USD' }) as unknown }),
     );
   });
 });

@@ -9,6 +9,7 @@ import {
   orderSelection,
   type OrdersDatabase,
 } from './service.js';
+import type { OrderDefaults, OrdersStockPort } from './stock.js';
 import type { OrderAccess, OrderStatus } from './types.js';
 
 const access: OrderAccess = { actorId: 'actor-1', scope: 'OWN' };
@@ -70,6 +71,8 @@ interface HarnessOptions {
   readonly itemCreate?: (args: unknown) => Promise<unknown>;
   /** What the active-user lookup for an assigned owner finds; null means nobody. */
   readonly owner?: { readonly id: string } | null;
+  /** The organisation settings; left out, the service falls back to USD and `ORD`. */
+  readonly defaults?: OrderDefaults;
 }
 
 const createHarness = (options: HarnessOptions = {}) => {
@@ -111,8 +114,19 @@ const createHarness = (options: HarnessOptions = {}) => {
   const publish = jest.fn((_event: DomainEventNotification): void => undefined);
   const events: DomainEventPublisher = { publish };
 
+  const resolveOrderDefaults = jest.fn(async (_transaction: unknown) => options.defaults);
+  const stock =
+    options.defaults === undefined
+      ? undefined
+      : ({
+          operations: { reserve: jest.fn(), release: jest.fn(), issue: jest.fn() },
+          resolveWarehouseId: jest.fn(async () => 'warehouse-1'),
+          resolveOrderDefaults,
+        } as unknown as OrdersStockPort);
+
   return {
-    service: createOrdersService(db, audit, events),
+    service: createOrdersService(db, audit, events, stock),
+    resolveOrderDefaults,
     db,
     findFirst,
     findMany,
@@ -272,7 +286,8 @@ describe('orders service catalogue guards', () => {
   });
 
   it('refuses to change the currency of an order that already has lines', async () => {
-    const harness = createHarness();
+    // An order kept from before the organisation settled on EUR still has USD lines.
+    const harness = createHarness({ defaults: { currency: 'EUR', numberPrefix: 'ORD' } });
 
     await expect(
       harness.service.update(access, draftOrder.id, { version: 1, currency: 'EUR' }),
@@ -315,7 +330,7 @@ describe('orders service duplicate', () => {
     );
   });
 
-  it('copies the contact, owner and currency, but assigns a fresh order number', async () => {
+  it('copies the contact and owner, but assigns a fresh order number', async () => {
     const harness = createHarness();
 
     await harness.service.duplicate(access, draftOrder.id);
@@ -876,5 +891,141 @@ describe('orders service search', () => {
         }) as unknown,
       }),
     );
+  });
+});
+
+describe('orders service deletion', () => {
+  it.each(['CONFIRMED', 'PAID', 'FULFILLED'] as const)(
+    'refuses to delete a %s order, which holds or has used a reservation',
+    async (status) => {
+      const harness = createHarness({ order: withStatus(status) });
+
+      await expect(harness.service.delete(access, draftOrder.id, 1)).rejects.toMatchObject({
+        statusCode: 409,
+        code: 'ORDER_NOT_DELETABLE',
+        details: { status },
+      });
+      expect(harness.updateOrder).not.toHaveBeenCalled();
+      expect(harness.record).not.toHaveBeenCalled();
+      expect(harness.publish).not.toHaveBeenCalled();
+    },
+  );
+
+  it('deletes a cancelled order', async () => {
+    const harness = createHarness({ order: withStatus('CANCELLED') });
+
+    await harness.service.delete(access, draftOrder.id, 1);
+
+    expect(harness.updateOrder).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports a stale version before the status', async () => {
+    const harness = createHarness({ order: withStatus('CONFIRMED') });
+
+    await expect(harness.service.delete(access, draftOrder.id, 2)).rejects.toMatchObject({
+      code: 'ORDER_CONCURRENT_MODIFICATION',
+    });
+  });
+});
+
+describe('orders service organisation settings', () => {
+  const euro: OrderDefaults = { currency: 'EUR', numberPrefix: 'SO' };
+
+  it('numbers a new order with the organisation prefix', async () => {
+    const harness = createHarness({ defaults: euro, products: [{ ...product, currency: 'EUR' }] });
+
+    await harness.service.create(access, {});
+
+    expect(harness.resolveOrderDefaults).toHaveBeenCalledTimes(1);
+    expect(harness.createOrder).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          orderNumber: expect.stringMatching(/^SO-\d{8}-[0-9A-Z]{6}$/) as unknown as string,
+        }) as unknown,
+      }),
+    );
+  });
+
+  it('creates an order in the organisation currency when none is given', async () => {
+    const harness = createHarness({ defaults: euro, products: [{ ...product, currency: 'EUR' }] });
+
+    await harness.service.create(access, { items: [{ productId: product.id, quantity: 1 }] });
+
+    expect(harness.createOrder).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ currency: 'EUR' }) as unknown }),
+    );
+  });
+
+  it('refuses to create an order in another currency', async () => {
+    const harness = createHarness({ defaults: euro });
+
+    await expect(harness.service.create(access, { currency: 'USD' })).rejects.toMatchObject({
+      statusCode: 422,
+      code: 'CURRENCY_NOT_SUPPORTED',
+      details: { currency: 'USD', expected: 'EUR' },
+    });
+    expect(harness.createOrder).not.toHaveBeenCalled();
+  });
+
+  it('refuses to move an order to another currency', async () => {
+    const harness = createHarness({ order: emptyDraft });
+
+    await expect(
+      harness.service.update(access, draftOrder.id, { version: 1, currency: 'EUR' }),
+    ).rejects.toMatchObject({
+      statusCode: 422,
+      code: 'CURRENCY_NOT_SUPPORTED',
+      details: { currency: 'EUR', expected: 'USD' },
+    });
+    expect(harness.updateOrder).not.toHaveBeenCalled();
+  });
+
+  it('accepts the organisation currency on update', async () => {
+    const harness = createHarness({ order: emptyDraft });
+
+    await harness.service.update(access, draftOrder.id, { version: 1, currency: 'USD' });
+
+    expect(harness.updateOrder).toHaveBeenCalledTimes(1);
+  });
+
+  it('duplicates an order into the organisation currency', async () => {
+    const harness = createHarness({ defaults: euro, products: [{ ...product, currency: 'EUR' }] });
+
+    await harness.service.duplicate(access, draftOrder.id);
+
+    expect(harness.createOrder).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ currency: 'EUR' }) as unknown }),
+    );
+  });
+
+  it('falls back to USD and the ORD prefix when no settings are wired', async () => {
+    const harness = createHarness();
+
+    await harness.service.create(access, {});
+
+    expect(harness.createOrder).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          currency: 'USD',
+          orderNumber: expect.stringMatching(/^ORD-/) as unknown as string,
+        }) as unknown,
+      }),
+    );
+  });
+});
+
+describe('orders service warehouse field', () => {
+  it('returns the warehouse the order reserved in', async () => {
+    const harness = createHarness({
+      order: { ...withStatus('CONFIRMED'), warehouseId: 'warehouse-1' } as typeof draftOrder,
+    });
+
+    await expect(harness.service.getById(access, draftOrder.id)).resolves.toMatchObject({
+      warehouseId: 'warehouse-1',
+    });
+  });
+
+  it('reads the warehouse with every order', () => {
+    expect(orderSelection).toMatchObject({ warehouseId: true });
   });
 });

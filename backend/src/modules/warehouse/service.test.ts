@@ -72,11 +72,12 @@ const createHarness = (options: HarnessOptions = {}) => {
     options.onCreateWarehouse ?? (async (_args: unknown) => activeWarehouse),
   );
   const updateWarehouse = jest.fn(async (_args: unknown) => activeWarehouse);
+  const findMovements = jest.fn(async (_args: unknown) => []);
 
   const transaction = {
     warehouse: { findUnique: findWarehouse, create: createWarehouse, update: updateWarehouse },
     stockLevel: { findUnique: findLevel, update: updateLevel, create: createLevel },
-    stockMovement: { create: createMovement },
+    stockMovement: { create: createMovement, findMany: findMovements },
     auditLog: { create: jest.fn() },
   };
 
@@ -105,16 +106,21 @@ const createHarness = (options: HarnessOptions = {}) => {
     createWarehouse,
     record,
     publish,
+    findMovements,
   };
 };
 
+/** A reservation held for something other than an order, which the API may move. */
 const reserveInput = {
   warehouseId,
   productId,
   quantity: 2,
-  referenceType: 'order',
+  referenceType: 'transfer',
   referenceId: orderId,
 };
+
+/** The same request under an order's reference, which only the order may move. */
+const orderReservation = { ...reserveInput, referenceType: 'order' };
 
 describe('warehouse stock arithmetic', () => {
   it('derives the available quantity instead of storing it', async () => {
@@ -177,7 +183,7 @@ describe('warehouse stock arithmetic', () => {
     expect(harness.updateLevel).not.toHaveBeenCalled();
   });
 
-  it('releases the reservation in the same statement as a reservation-backed issue', async () => {
+  it('records a reservation-backed issue as a release followed by the issue', async () => {
     const harness = createHarness();
 
     await harness.service.issue(access, {
@@ -185,15 +191,30 @@ describe('warehouse stock arithmetic', () => {
       productId,
       quantity: 4,
       fromReservation: true,
-      referenceType: 'order',
+      referenceType: 'transfer',
       referenceId: orderId,
     });
 
-    expect(harness.updateLevel).toHaveBeenCalledWith(
+    // The ledger alone must explain both counters, so the freed reservation is
+    // a movement of its own rather than a side effect of the issue.
+    expect(harness.updateLevel).toHaveBeenNthCalledWith(
+      1,
       expect.objectContaining({
-        data: expect.objectContaining({ quantityOnHand: 6, quantityReserved: 0 }),
+        data: expect.objectContaining({ quantityOnHand: 10, quantityReserved: 0 }),
       }),
     );
+    expect(harness.createMovement.mock.calls.map(([args]) => args)).toEqual([
+      expect.objectContaining({
+        data: expect.objectContaining({ type: 'RELEASE', quantity: 4, referenceType: 'transfer' }),
+      }),
+      expect.objectContaining({
+        data: expect.objectContaining({ type: 'ISSUE', quantity: 4, referenceType: 'transfer' }),
+      }),
+    ]);
+    expect(harness.publish.mock.calls.map(([event]) => event.eventType)).toEqual([
+      'stock.released',
+      'stock.issued',
+    ]);
   });
 });
 
@@ -251,7 +272,7 @@ describe('warehouse oversell guards', () => {
         productId,
         quantity: 5,
         fromReservation: true,
-        referenceType: 'order',
+        referenceType: 'transfer',
         referenceId: orderId,
       }),
     ).rejects.toMatchObject({ statusCode: 409, code: 'INSUFFICIENT_RESERVATION' });
@@ -319,7 +340,7 @@ describe('warehouse adjustments', () => {
     expect(harness.db.$transaction).not.toHaveBeenCalled();
   });
 
-  it('records a negative correction as a positive movement quantity', async () => {
+  it('records a negative correction with its sign, so the ledger adds up to the level', async () => {
     const harness = createHarness();
 
     await harness.service.adjust(access, {
@@ -333,7 +354,7 @@ describe('warehouse adjustments', () => {
       expect.objectContaining({
         data: expect.objectContaining({
           type: 'ADJUSTMENT',
-          quantity: 2,
+          quantity: -2,
           note: 'damaged in transit',
         }),
       }),
@@ -544,5 +565,56 @@ describe('warehouse search', () => {
         },
       }),
     );
+  });
+});
+
+describe('warehouse reservations held for orders', () => {
+  it('refuses a manual release of stock an order holds', async () => {
+    const harness = createHarness();
+
+    await expect(harness.service.release(access, orderReservation)).rejects.toMatchObject({
+      statusCode: 409,
+      code: 'STOCK_ORDER_REFERENCE_FORBIDDEN',
+      details: { operation: 'release', referenceType: 'order', referenceId: orderId },
+    });
+    expect(harness.findWarehouse).not.toHaveBeenCalled();
+    expect(harness.updateLevel).not.toHaveBeenCalled();
+  });
+
+  it('refuses a manual issue under an order reference', async () => {
+    const harness = createHarness();
+
+    await expect(
+      harness.service.issue(access, {
+        warehouseId,
+        productId,
+        quantity: 2,
+        fromReservation: true,
+        referenceType: 'order',
+        referenceId: orderId,
+      }),
+    ).rejects.toMatchObject({ statusCode: 409, code: 'STOCK_ORDER_REFERENCE_FORBIDDEN' });
+    expect(harness.updateLevel).not.toHaveBeenCalled();
+  });
+
+  it('refuses a manual reservation under an order reference', async () => {
+    const harness = createHarness();
+
+    await expect(harness.service.reserve(access, orderReservation)).rejects.toMatchObject({
+      statusCode: 409,
+      code: 'STOCK_ORDER_REFERENCE_FORBIDDEN',
+      details: { operation: 'reserve', referenceType: 'order', referenceId: orderId },
+    });
+    expect(harness.findWarehouse).not.toHaveBeenCalled();
+    expect(harness.updateLevel).not.toHaveBeenCalled();
+  });
+
+  it('does not look up the ledger for a reservation that is not an order', async () => {
+    const harness = createHarness();
+
+    await harness.service.reserve(access, reserveInput);
+
+    expect(harness.findMovements).not.toHaveBeenCalled();
+    expect(harness.updateLevel).toHaveBeenCalledTimes(1);
   });
 });

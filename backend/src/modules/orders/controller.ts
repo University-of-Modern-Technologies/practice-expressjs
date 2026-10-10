@@ -1,5 +1,5 @@
 import type { Request, RequestHandler, Response } from 'express';
-import { AppError, validationError } from '../../common/errors/index.js';
+import { AppError, describeValidationIssues, validationError } from '../../common/errors/index.js';
 import type { AuthContext } from '../../common/types/auth-context.js';
 import type { RbacService } from '../rbac/service.js';
 import type { PermissionScope } from '../rbac/types.js';
@@ -97,35 +97,35 @@ export const createOrdersController = (
     list: async (request, response) => {
       const access = await authorize(request, response, 'read');
       const parsed = listOrdersSchema.safeParse({ query: request.query });
-      if (!parsed.success) throw validationError(parsed.error.flatten());
+      if (!parsed.success) throw validationError(describeValidationIssues(parsed.error));
       response.json({ data: await service.list(access, parsed.data.query) });
     },
 
     getById: async (request, response) => {
       const access = await authorize(request, response, 'read');
       const parsed = getOrderSchema.safeParse({ params: request.params });
-      if (!parsed.success) throw validationError(parsed.error.flatten());
+      if (!parsed.success) throw validationError(describeValidationIssues(parsed.error));
       response.json({ data: await service.getById(access, parsed.data.params.id) });
     },
 
     create: async (request, response) => {
       const access = await authorize(request, response, 'write');
       const parsed = createOrderSchema.safeParse({ body: request.body });
-      if (!parsed.success) throw validationError(parsed.error.flatten());
+      if (!parsed.success) throw validationError(describeValidationIssues(parsed.error));
       response.status(201).json({ data: await service.create(access, parsed.data.body) });
     },
 
     duplicate: async (request, response) => {
       const access = await authorize(request, response, 'write');
       const parsed = duplicateOrderSchema.safeParse({ params: request.params });
-      if (!parsed.success) throw validationError(parsed.error.flatten());
+      if (!parsed.success) throw validationError(describeValidationIssues(parsed.error));
       response.status(201).json({ data: await service.duplicate(access, parsed.data.params.id) });
     },
 
     update: async (request, response) => {
       const access = await authorize(request, response, 'write');
       const parsed = updateOrderSchema.safeParse({ params: request.params, body: request.body });
-      if (!parsed.success) throw validationError(parsed.error.flatten());
+      if (!parsed.success) throw validationError(describeValidationIssues(parsed.error));
       response.json({
         data: await service.update(access, parsed.data.params.id, parsed.data.body),
       });
@@ -134,7 +134,7 @@ export const createOrdersController = (
     addItem: async (request, response) => {
       const access = await authorize(request, response, 'write');
       const parsed = addOrderItemSchema.safeParse({ params: request.params, body: request.body });
-      if (!parsed.success) throw validationError(parsed.error.flatten());
+      if (!parsed.success) throw validationError(describeValidationIssues(parsed.error));
       response.status(201).json({
         data: await service.addItem(access, parsed.data.params.id, parsed.data.body),
       });
@@ -146,7 +146,7 @@ export const createOrdersController = (
         params: request.params,
         body: request.body,
       });
-      if (!parsed.success) throw validationError(parsed.error.flatten());
+      if (!parsed.success) throw validationError(describeValidationIssues(parsed.error));
       response.json({
         data: await service.updateItem(
           access,
@@ -163,7 +163,7 @@ export const createOrdersController = (
         params: request.params,
         query: request.query,
       });
-      if (!parsed.success) throw validationError(parsed.error.flatten());
+      if (!parsed.success) throw validationError(describeValidationIssues(parsed.error));
       response.json({
         data: await service.removeItem(
           access,
@@ -180,7 +180,7 @@ export const createOrdersController = (
         params: request.params,
         body: request.body,
       });
-      if (!parsed.success) throw validationError(parsed.error.flatten());
+      if (!parsed.success) throw validationError(describeValidationIssues(parsed.error));
       response.json({
         data: await service.transition(access, parsed.data.params.id, parsed.data.body),
       });
@@ -189,7 +189,7 @@ export const createOrdersController = (
     delete: async (request, response) => {
       const access = await authorize(request, response, 'delete');
       const parsed = deleteOrderSchema.safeParse({ params: request.params, query: request.query });
-      if (!parsed.success) throw validationError(parsed.error.flatten());
+      if (!parsed.success) throw validationError(describeValidationIssues(parsed.error));
       await service.delete(access, parsed.data.params.id, parsed.data.query.version);
       response.status(204).end();
     },

@@ -26,12 +26,17 @@ const lineOf = (id: string, productId: string, quantity: number) => ({
 
 const items = [lineOf('item-1', 'product-1', 3), lineOf('item-2', 'product-2', 2)];
 
-const orderWith = (status: OrderStatus) => ({
+const orderWith = (
+  status: OrderStatus,
+  lines: readonly ReturnType<typeof lineOf>[] = items,
+  recordedWarehouseId: string | null = null,
+) => ({
   id: 'order-1',
   orderNumber: 'ORD-20260101-ABC123',
   ownerId: access.actorId,
   contactId: null,
   dealId: null,
+  warehouseId: recordedWarehouseId,
   status,
   currency: 'USD',
   subtotal: '50.00',
@@ -44,7 +49,7 @@ const orderWith = (status: OrderStatus) => ({
   createdAt: timestamp,
   updatedAt: timestamp,
   deletedAt: null,
-  items,
+  items: lines,
 });
 
 interface HarnessOptions {
@@ -54,10 +59,18 @@ interface HarnessOptions {
   readonly onReserve?: () => Promise<OrderStockChange>;
   /** Leaves the stock port out entirely, as a composition without a warehouse would. */
   readonly withoutStock?: boolean;
+  /** The order's lines, in the order the store returns them. */
+  readonly lines?: readonly ReturnType<typeof lineOf>[];
+  /** The warehouse a confirmation already recorded on the order. */
+  readonly recordedWarehouseId?: string | null;
 }
 
 const createHarness = (options: HarnessOptions = {}) => {
-  const current = orderWith(options.status ?? 'DRAFT');
+  const current = orderWith(
+    options.status ?? 'DRAFT',
+    options.lines ?? items,
+    options.recordedWarehouseId ?? null,
+  );
   /** Records what happened in which order, so "after commit" can be asserted. */
   const timeline: string[] = [];
 
@@ -317,5 +330,80 @@ describe('orders service without a stock port', () => {
     expect(harness.publish).toHaveBeenCalledWith(
       expect.objectContaining({ eventType: 'order.status_transitioned' }),
     );
+  });
+});
+
+describe('the warehouse an order reserves in', () => {
+  it('records the warehouse on the order when it is confirmed', async () => {
+    const harness = createHarness();
+
+    await harness.service.transition(access, 'order-1', { version: 1, status: 'CONFIRMED' });
+
+    expect(harness.updateOrder).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ status: 'CONFIRMED', warehouseId }) as unknown,
+      }),
+    );
+  });
+
+  it('releases in the warehouse the order reserved in, whatever the setting says now', async () => {
+    const harness = createHarness({ status: 'CONFIRMED', recordedWarehouseId: 'warehouse-old' });
+
+    await harness.service.transition(access, 'order-1', { version: 1, status: 'CANCELLED' });
+
+    expect(harness.resolveWarehouseId).not.toHaveBeenCalled();
+    for (const call of harness.release.mock.calls) {
+      expect(call[2]).toMatchObject({ warehouseId: 'warehouse-old' });
+    }
+  });
+
+  it('fulfils from the warehouse the order reserved in', async () => {
+    const harness = createHarness({ status: 'PAID', recordedWarehouseId: 'warehouse-old' });
+
+    await harness.service.transition(access, 'order-1', { version: 1, status: 'FULFILLED' });
+
+    expect(harness.resolveWarehouseId).not.toHaveBeenCalled();
+    expect(harness.issue).toHaveBeenCalledWith(
+      harness.transaction,
+      access,
+      expect.objectContaining({ warehouseId: 'warehouse-old', fromReservation: true }),
+    );
+  });
+
+  it('falls back to the configured warehouse for an order that recorded none', async () => {
+    const harness = createHarness({ status: 'CONFIRMED' });
+
+    await harness.service.transition(access, 'order-1', { version: 1, status: 'CANCELLED' });
+
+    expect(harness.resolveWarehouseId).toHaveBeenCalledTimes(1);
+    expect(harness.release).toHaveBeenCalledWith(
+      harness.transaction,
+      access,
+      expect.objectContaining({ warehouseId }),
+    );
+  });
+});
+
+describe('the order stock locks are taken in', () => {
+  it('reserves the lines in product order, whatever order they were added in', async () => {
+    const harness = createHarness({ lines: [...items].reverse() });
+
+    await harness.service.transition(access, 'order-1', { version: 1, status: 'CONFIRMED' });
+
+    expect(harness.reserve.mock.calls.map((call) => call[2].productId)).toEqual([
+      'product-1',
+      'product-2',
+    ]);
+  });
+
+  it('releases the lines in the same product order', async () => {
+    const harness = createHarness({ status: 'CONFIRMED', lines: [...items].reverse() });
+
+    await harness.service.transition(access, 'order-1', { version: 1, status: 'CANCELLED' });
+
+    expect(harness.release.mock.calls.map((call) => call[2].productId)).toEqual([
+      'product-1',
+      'product-2',
+    ]);
   });
 });

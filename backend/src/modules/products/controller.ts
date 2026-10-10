@@ -1,5 +1,5 @@
 import type { Request, RequestHandler, Response } from 'express';
-import { AppError, validationError } from '../../common/errors/index.js';
+import { AppError, describeValidationIssues, validationError } from '../../common/errors/index.js';
 import type { AuthContext } from '../../common/types/auth-context.js';
 import type { RbacService } from '../rbac/service.js';
 import type { PermissionScope } from '../rbac/types.js';
@@ -87,28 +87,28 @@ export const createProductsController = (
     list: async (request, response) => {
       const access = await authorize(request, response, 'read');
       const parsed = listProductsSchema.safeParse({ query: request.query });
-      if (!parsed.success) throw validationError(parsed.error.flatten());
+      if (!parsed.success) throw validationError(describeValidationIssues(parsed.error));
       response.json({ data: await service.list(access, parsed.data.query) });
     },
 
     getById: async (request, response) => {
       const access = await authorize(request, response, 'read');
       const parsed = getProductSchema.safeParse({ params: request.params });
-      if (!parsed.success) throw validationError(parsed.error.flatten());
+      if (!parsed.success) throw validationError(describeValidationIssues(parsed.error));
       response.json({ data: await service.getById(access, parsed.data.params.id) });
     },
 
     create: async (request, response) => {
       const access = await authorize(request, response, 'write');
       const parsed = createProductSchema.safeParse({ body: request.body });
-      if (!parsed.success) throw validationError(parsed.error.flatten());
+      if (!parsed.success) throw validationError(describeValidationIssues(parsed.error));
       response.status(201).json({ data: await service.create(access, parsed.data.body) });
     },
 
     update: async (request, response) => {
       const access = await authorize(request, response, 'write');
       const parsed = updateProductSchema.safeParse({ params: request.params, body: request.body });
-      if (!parsed.success) throw validationError(parsed.error.flatten());
+      if (!parsed.success) throw validationError(describeValidationIssues(parsed.error));
       response.json({
         data: await service.update(access, parsed.data.params.id, parsed.data.body),
       });
@@ -120,7 +120,7 @@ export const createProductsController = (
         params: request.params,
         query: request.query,
       });
-      if (!parsed.success) throw validationError(parsed.error.flatten());
+      if (!parsed.success) throw validationError(describeValidationIssues(parsed.error));
       await service.delete(access, parsed.data.params.id, parsed.data.query.version);
       response.status(204).end();
     },

@@ -44,6 +44,10 @@ export const orderSchema = z
     ownerId: z.uuid(),
     contactId: z.uuid().nullable(),
     dealId: z.uuid().nullable(),
+    warehouseId: z.uuid().nullable().meta({
+      description:
+        'Склад, у якому замовлення тримає резерв; записується при підтвердженні, до того null.',
+    }),
     status: orderStatusSchema,
     currency: currencyCodeSchema,
     subtotal: decimalStringSchema,

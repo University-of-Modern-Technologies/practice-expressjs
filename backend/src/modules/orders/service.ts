@@ -11,8 +11,10 @@ import type { AuditService } from '../audit/service.js';
 import { ZERO_MONEY, normalizeMoney } from '../../common/money/index.js';
 import { calculateLineTotal, calculateOrderTotals, type OrderTotals } from './money.js';
 import {
+  FALLBACK_ORDER_DEFAULTS,
   ORDER_STOCK_REFERENCE_TYPE,
   stockEffectForTransition,
+  type OrderDefaults,
   type OrderStockEffect,
   type OrdersStockPort,
 } from './stock.js';
@@ -79,7 +81,6 @@ export interface OrdersService {
   delete(access: OrderAccess, id: string, version: number): Promise<void>;
 }
 
-const DEFAULT_CURRENCY = 'USD';
 /** Bounded so a pathological collision streak fails fast instead of looping. */
 const ORDER_NUMBER_ATTEMPTS = 5;
 
@@ -114,6 +115,7 @@ export const orderSelection = {
   ownerId: true,
   contactId: true,
   dealId: true,
+  warehouseId: true,
   status: true,
   currency: true,
   subtotal: true,
@@ -214,17 +216,57 @@ const ensureOwnerAccess = (access: OrderAccess, ownerId: string): void => {
 };
 
 /**
- * Human-readable and collision-resistant: a date prefix keeps the sequence
- * browsable while the random suffix keeps concurrent writers apart.
+ * Human-readable and collision-resistant: the organisation's prefix and the
+ * date keep the sequence browsable while the random suffix keeps concurrent
+ * writers apart.
  */
-const generateOrderNumber = (): string => {
+const generateOrderNumber = (prefix: string): string => {
   const date = new Date().toISOString().slice(0, 10).replace(/-/g, '');
   const suffix = Math.floor(Math.random() * 36 ** 6)
     .toString(36)
     .toUpperCase()
     .padStart(6, '0');
-  return `ORD-${date}-${suffix}`;
+  return `${prefix}-${date}-${suffix}`;
 };
+
+/**
+ * The organisation keeps its books in one currency, so an order in any other
+ * would be summed with the rest as if it were the same money.
+ */
+const assertOrganizationCurrency = (currency: string, defaults: OrderDefaults): void => {
+  if (currency !== defaults.currency) {
+    throw new AppError(
+      'Only the organisation currency is accepted',
+      422,
+      'CURRENCY_NOT_SUPPORTED',
+      { currency, expected: defaults.currency },
+    );
+  }
+};
+
+/** Only an order that never promised stock, or has given its promise back, may go. */
+const DELETABLE_STATUSES: readonly OrderStatus[] = ['DRAFT', 'CANCELLED'];
+
+const assertOrderDeletable = (status: OrderStatus): void => {
+  if (!DELETABLE_STATUSES.includes(status)) {
+    throw new AppError(
+      `Only a draft or a cancelled order can be deleted (current status: ${status})`,
+      409,
+      'ORDER_NOT_DELETABLE',
+      { status },
+    );
+  }
+};
+
+/**
+ * Lines in product order. Every transaction that moves stock for several lines
+ * takes the stock-level locks in this one order, so two confirmations sharing
+ * products wait for each other instead of deadlocking.
+ */
+const byProduct = <T extends { readonly productId: string }>(lines: readonly T[]): readonly T[] =>
+  [...lines].sort((left, right) =>
+    left.productId < right.productId ? -1 : left.productId > right.productId ? 1 : 0,
+  );
 
 const findActive = async (
   store: OrdersTransaction['order'],
@@ -415,15 +457,19 @@ export const createOrdersService = (
     }
   };
 
+  const resolveDefaults = async (transaction: PrismaTransaction): Promise<OrderDefaults> =>
+    stock?.resolveOrderDefaults ? stock.resolveOrderDefaults(transaction) : FALLBACK_ORDER_DEFAULTS;
+
   /**
    * Retries the whole transaction, not just the insert: a unique violation
    * aborts the surrounding Postgres transaction, so a fresh number has to be
-   * drawn in a fresh transaction.
+   * drawn in a fresh transaction. The number itself is drawn inside `run`,
+   * where the organisation's prefix is read.
    */
-  const withOrderNumber = async <T>(run: (orderNumber: string) => Promise<T>): Promise<T> => {
+  const withOrderNumber = async <T>(run: () => Promise<T>): Promise<T> => {
     for (let attempt = 1; attempt <= ORDER_NUMBER_ATTEMPTS; attempt += 1) {
       try {
-        return await run(generateOrderNumber());
+        return await run();
       } catch (error) {
         if (!isOrderNumberConflict(error) || attempt === ORDER_NUMBER_ATTEMPTS) throw error;
       }
@@ -483,14 +529,22 @@ export const createOrdersService = (
    * they all share a single transaction and a database transaction serves one
    * statement at a time.
    */
-  const applyStockEffect = async (
+  /**
+   * The warehouse a stock effect goes to. A confirmation asks the resolver and
+   * the answer is written onto the order; cancellation and fulfilment follow
+   * the order to the warehouse it reserved in, whatever the setting says now.
+   * An order confirmed before the order kept its warehouse has none recorded,
+   * and only for it is the resolver asked again. `null` means the composition
+   * has no stock side at all.
+   */
+  const stockWarehouseFor = async (
     transaction: PrismaTransaction,
-    access: OrderAccess,
     order: OrderRecord,
     effect: OrderStockEffect,
-  ): Promise<readonly (() => void)[]> => {
-    if (!stock) return [];
-    const warehouseId = await stock.resolveWarehouseId(transaction);
+  ): Promise<string | null> => {
+    if (!stock) return null;
+    const recorded = effect === 'reserve' ? null : order.warehouseId;
+    const warehouseId = recorded ?? (await stock.resolveWarehouseId(transaction));
     if (!warehouseId) {
       throw new AppError(
         'No warehouse is configured to hold stock for orders',
@@ -498,8 +552,19 @@ export const createOrdersService = (
         'WAREHOUSE_NOT_CONFIGURED',
       );
     }
+    return warehouseId;
+  };
+
+  const applyStockEffect = async (
+    transaction: PrismaTransaction,
+    access: OrderAccess,
+    order: OrderRecord,
+    effect: OrderStockEffect,
+    warehouseId: string,
+  ): Promise<readonly (() => void)[]> => {
+    if (!stock) return [];
     const publishers: (() => void)[] = [];
-    for (const line of order.items) {
+    for (const line of byProduct(order.items)) {
       const input = {
         warehouseId,
         productId: line.productId,
@@ -537,12 +602,15 @@ export const createOrdersService = (
   const create = async (access: OrderAccess, data: CreateOrderData): Promise<OrderDto> => {
     const ownerId = data.ownerId ?? access.actorId;
     ensureOwnerAccess(access, ownerId);
-    const currency = data.currency ?? DEFAULT_CURRENCY;
     const discountTotal = data.discountTotal ?? ZERO_MONEY;
     const taxTotal = data.taxTotal ?? ZERO_MONEY;
 
-    const created = await withOrderNumber(async (orderNumber) =>
+    const created = await withOrderNumber(async () =>
       db.$transaction(async (transaction) => {
+        const defaults = await resolveDefaults(transaction);
+        const currency = data.currency ?? defaults.currency;
+        assertOrganizationCurrency(currency, defaults);
+        const orderNumber = generateOrderNumber(defaults.numberPrefix);
         // The caller's own account is already known to be active; anybody
         // else named as the owner has to be checked.
         if (ownerId !== access.actorId) await assertOwnerAssignable(transaction, ownerId);
@@ -628,13 +696,14 @@ export const createOrdersService = (
     // The source may be in any status: duplicating is not a transition, it is a
     // fresh order that happens to start from the same lines. Prices are never
     // copied — the create path re-prices every line from the catalogue as it
-    // stands now, so a duplicate never sells at a stale price.
+    // stands now, so a duplicate never sells at a stale price. Nor is the
+    // currency: the copy is made in the organisation's currency, the only one
+    // a new order may carry.
     async duplicate(access, id) {
       const source = await findActive(db.order, access, id);
       return create(access, {
         ownerId: source.ownerId,
         contactId: source.contactId ?? undefined,
-        currency: source.currency,
         items: source.items.map((item) => ({ productId: item.productId, quantity: item.quantity })),
       });
     },
@@ -643,6 +712,9 @@ export const createOrdersService = (
       const result = await db.$transaction(async (transaction) => {
         const existing = await findActive(transaction.order, access, id);
         assertCurrentVersion(existing.version, data.version);
+        if (data.currency !== undefined) {
+          assertOrganizationCurrency(data.currency, await resolveDefaults(transaction));
+        }
         const ownerId = data.ownerId ?? existing.ownerId;
         ensureOwnerAccess(access, ownerId);
         if (ownerId !== existing.ownerId) await assertOwnerAssignable(transaction, ownerId);
@@ -859,6 +931,8 @@ export const createOrdersService = (
         assertCurrentVersion(existing.version, data.version);
         assertOrderStatusTransition(existing.status, data.status);
         assertOrderHasItems(existing.status, existing.items.length, data.status);
+        const effect = stockEffectForTransition(existing.status, data.status);
+        const warehouseId = effect ? await stockWarehouseFor(transaction, existing, effect) : null;
         const transitioned = await applyOrderUpdate(
           transaction,
           access,
@@ -866,18 +940,20 @@ export const createOrdersService = (
           { version: existing.version, status: existing.status },
           {
             status: data.status,
-            // Confirmation is the moment the order is actually placed.
+            // Confirmation is the moment the order is actually placed, and the
+            // warehouse it reserves in becomes part of the order.
             ...(data.status === 'CONFIRMED' ? { placedAt: new Date() } : {}),
+            ...(effect === 'reserve' && warehouseId !== null ? { warehouseId } : {}),
           },
         );
         // Stock moves on the same transaction as the status change: a
         // reservation that cannot be met throws here, which rolls the status
         // change back and leaves the order where it was. The order write goes
         // first so that a stale version is rejected before any stock is touched.
-        const effect = stockEffectForTransition(existing.status, data.status);
-        const stockPublishers = effect
-          ? await applyStockEffect(transaction, access, existing, effect)
-          : [];
+        const stockPublishers =
+          effect && warehouseId !== null
+            ? await applyStockEffect(transaction, access, existing, effect, warehouseId)
+            : [];
         const before = toDto(existing);
         const after = toDto(transitioned);
         await audit.record(transaction, {
@@ -910,6 +986,9 @@ export const createOrdersService = (
       await db.$transaction(async (transaction) => {
         const existing = await findActive(transaction.order, access, id);
         assertCurrentVersion(existing.version, version);
+        // A confirmed or paid order holds a reservation that only its own
+        // cancellation gives back; deleting it would strand that stock.
+        assertOrderDeletable(existing.status);
         const deletedAt = new Date();
         try {
           await transaction.order.update({
