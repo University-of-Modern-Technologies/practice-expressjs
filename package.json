@@ -1,0 +1,37 @@
+{
+  "name": "practice-crm",
+  "private": true,
+  "description": "Навчальна CRM: запуск стека, локальна розробка й обслуговування",
+  "type": "module",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "setup": "node scripts/stack.mjs setup",
+    "local:install": "node scripts/stack.mjs local:install",
+    "local:api": "node scripts/stack.mjs local:api",
+    "local:web": "node scripts/stack.mjs local:web",
+    "docker:db": "node scripts/stack.mjs docker:db",
+    "docker:api": "node scripts/stack.mjs docker:api",
+    "docker:all": "node scripts/stack.mjs docker:all",
+    "docker:prod": "node scripts/stack.mjs docker:prod",
+    "docker:build": "node scripts/stack.mjs docker:build",
+    "docker:stop": "node scripts/stack.mjs docker:stop",
+    "docker:clean": "node scripts/stack.mjs docker:clean",
+    "docker:logs": "node scripts/stack.mjs docker:logs",
+    "docker:ps": "node scripts/stack.mjs docker:ps",
+    "docker:portainer": "node scripts/stack.mjs docker:portainer",
+    "db:migrate": "node scripts/stack.mjs db:migrate",
+    "db:seed:demo": "node scripts/stack.mjs db:seed:demo",
+    "test": "node scripts/stack.mjs test",
+    "test:integration": "node scripts/stack.mjs test:integration",
+    "check": "node scripts/stack.mjs check",
+    "check:api": "node scripts/stack.mjs check:api",
+    "check:web": "node scripts/stack.mjs check:web",
+    "prepare": "husky"
+  },
+  "devDependencies": {
+    "husky": "9.1.7",
+    "lint-staged": "17.5.1"
+  }
+}

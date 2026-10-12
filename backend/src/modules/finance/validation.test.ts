@@ -1,0 +1,221 @@
+import { describe, expect, it } from '@jest/globals';
+
+import { DEFAULT_KYIV_WINDOW_FROM, defaultKyivWindowTo } from '../analytics/kyiv-time.js';
+import {
+  MAX_SUMMARY_RANGE_DAYS,
+  financeSummarySchema,
+  importStatementSchema,
+  listStatementsSchema,
+  listTransactionsSchema,
+  matchTransactionSchema,
+  reconcileSchema,
+  unmatchTransactionSchema,
+} from './validation.js';
+
+const id = '5ff875e1-4c1d-4e45-9c8a-fceb5fb5d836';
+const orderId = 'd2d0a3a1-0f9a-4c8e-8f0a-1f7f8ba2c111';
+
+const DAY_MS = 86_400_000;
+
+describe('statement list validation', () => {
+  it('sorts by the statement period unless told otherwise', () => {
+    const parsed = listStatementsSchema.safeParse({ query: {} });
+    expect(parsed.success && parsed.data.query).toMatchObject({
+      page: 1,
+      pageSize: 20,
+      sortBy: 'periodStart',
+      sortOrder: 'desc',
+    });
+  });
+
+  it('accepts only the documented sort fields', () => {
+    for (const sortBy of ['periodStart', 'importedAt', 'createdAt']) {
+      expect(listStatementsSchema.safeParse({ query: { sortBy } }).success).toBe(true);
+    }
+    expect(listStatementsSchema.safeParse({ query: { sortBy: 'closingBalance' } }).success).toBe(
+      false,
+    );
+  });
+});
+
+describe('transaction list validation', () => {
+  it('sorts by the booking date unless told otherwise', () => {
+    const parsed = listTransactionsSchema.safeParse({ query: {} });
+    expect(parsed.success && parsed.data.query).toMatchObject({
+      page: 1,
+      pageSize: 20,
+      sortBy: 'bookedAt',
+      sortOrder: 'desc',
+    });
+  });
+
+  it('keeps an amount filter as text rather than coercing it to a number', () => {
+    const parsed = listTransactionsSchema.safeParse({ query: { minAmount: '19.99' } });
+    expect(parsed.success && parsed.data.query.minAmount).toBe('19.99');
+    // Three decimals is not money at this scale, and neither is an exponent.
+    expect(listTransactionsSchema.safeParse({ query: { minAmount: '19.999' } }).success).toBe(
+      false,
+    );
+    expect(listTransactionsSchema.safeParse({ query: { minAmount: '1e3' } }).success).toBe(false);
+    expect(listTransactionsSchema.safeParse({ query: { minAmount: '-5.00' } }).success).toBe(false);
+  });
+
+  it('rejects bounds that run backwards, in dates and in amounts alike', () => {
+    expect(
+      listTransactionsSchema.safeParse({
+        query: { bookedFrom: '2026-03-02T00:00:00Z', bookedTo: '2026-03-01T00:00:00Z' },
+      }).success,
+    ).toBe(false);
+    // `9.99` against `10.00` is exactly where a text comparison would be wrong.
+    expect(
+      listTransactionsSchema.safeParse({ query: { minAmount: '9.99', maxAmount: '10.00' } })
+        .success,
+    ).toBe(true);
+    expect(
+      listTransactionsSchema.safeParse({ query: { minAmount: '10.00', maxAmount: '9.99' } })
+        .success,
+    ).toBe(false);
+  });
+
+  it('accepts only the documented match statuses', () => {
+    for (const matchStatus of ['UNMATCHED', 'SUGGESTED', 'MATCHED', 'IGNORED']) {
+      expect(listTransactionsSchema.safeParse({ query: { matchStatus } }).success).toBe(true);
+    }
+    expect(listTransactionsSchema.safeParse({ query: { matchStatus: 'MAYBE' } }).success).toBe(
+      false,
+    );
+  });
+});
+
+describe('import and reconcile validation', () => {
+  it('take no parameters and drop anything a caller sends', () => {
+    const imported = importStatementSchema.safeParse({ body: { statementId: 'forged' } });
+    expect(imported.success && imported.data.body).toEqual({});
+    expect(importStatementSchema.safeParse({ body: undefined }).success).toBe(true);
+
+    const reconciled = reconcileSchema.safeParse({ body: { tolerance: '999.00' } });
+    expect(reconciled.success && reconciled.data.body).toEqual({});
+  });
+});
+
+describe('matching validation', () => {
+  it('requires both the order and the version to match by hand', () => {
+    expect(
+      matchTransactionSchema.safeParse({ params: { id }, body: { version: 1, orderId } }).success,
+    ).toBe(true);
+    expect(matchTransactionSchema.safeParse({ params: { id }, body: { orderId } }).success).toBe(
+      false,
+    );
+    expect(matchTransactionSchema.safeParse({ params: { id }, body: { version: 1 } }).success).toBe(
+      false,
+    );
+  });
+
+  it('requires a version query parameter to undo a match', () => {
+    expect(
+      unmatchTransactionSchema.safeParse({ params: { id }, query: { version: '2' } }).success,
+    ).toBe(true);
+    expect(unmatchTransactionSchema.safeParse({ params: { id }, query: {} }).success).toBe(false);
+  });
+});
+
+describe('summary validation', () => {
+  // Each bound defaults on its own, from the shared reporting window, before
+  // anything is checked — the way the analytics reports resolve theirs.
+  it('fills a request that names no window from the default, on the Kyiv calendar', () => {
+    const parsed = financeSummarySchema.safeParse({ query: {} });
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) return;
+    expect(parsed.data.query.from).toBe(DEFAULT_KYIV_WINDOW_FROM);
+    expect(parsed.data.query.to).toBe(defaultKyivWindowTo());
+  });
+
+  it('still checks a window the caller did name', () => {
+    expect(
+      financeSummarySchema.safeParse({
+        query: { from: '2026-03-01T00:00:00Z', to: '2026-04-01T00:00:00Z' },
+      }).success,
+    ).toBe(true);
+  });
+
+  it('takes a single bound that makes a sound window with the default', () => {
+    expect(
+      financeSummarySchema.safeParse({ query: { from: '2026-03-01T00:00:00Z' } }).success,
+    ).toBe(true);
+  });
+
+  // One bound alone used to pass unexamined, and a window running
+  // backwards against the default was answered with an empty report.
+  it('checks a single bound against the default it is paired with', () => {
+    expect(
+      financeSummarySchema.safeParse({ query: { from: '9999-01-01T00:00:00Z' } }).success,
+    ).toBe(false);
+    expect(financeSummarySchema.safeParse({ query: { to: '2025-12-31T00:00:00Z' } }).success).toBe(
+      false,
+    );
+  });
+
+  it('refuses a window that runs backwards or scans years', () => {
+    expect(
+      financeSummarySchema.safeParse({
+        query: { from: '2026-03-02T00:00:00Z', to: '2026-03-01T00:00:00Z' },
+      }).success,
+    ).toBe(false);
+
+    const to = Date.parse('2026-03-01T00:00:00Z');
+    const tooWide = new Date(to - (MAX_SUMMARY_RANGE_DAYS + 1) * DAY_MS).toISOString();
+    expect(
+      financeSummarySchema.safeParse({ query: { from: tooWide, to: new Date(to).toISOString() } })
+        .success,
+    ).toBe(false);
+  });
+
+  // The bounds are read by the same rule as the analytics reports.
+  it('reads a bound without a zone on the Kyiv clock and refuses what is not a date', () => {
+    const parsed = financeSummarySchema.safeParse({
+      query: { from: '2026-03-01T10:30', to: '2026-04-01' },
+    });
+    // UTC+2 on 1 March, UTC+3 on 1 April: the clocks moved in between.
+    expect(parsed.success && parsed.data.query).toEqual({
+      from: '2026-03-01T08:30:00.000Z',
+      to: '2026-03-31T21:00:00.000Z',
+    });
+    for (const junk of ['1', '2026-02-31', '2026-03-01 10:30', 'March 1, 2026']) {
+      expect(financeSummarySchema.safeParse({ query: { from: junk } }).success).toBe(false);
+    }
+  });
+});
+
+describe('booking window validation', () => {
+  // The ledger's bounds follow the same rule as every report bound.
+  it('reads a booking bound without a zone on the Kyiv clock', () => {
+    const parsed = listTransactionsSchema.safeParse({
+      query: { bookedFrom: '2026-01-05', bookedTo: '2026-01-06T12:00:00+02:00' },
+    });
+    expect(parsed.success && parsed.data.query).toMatchObject({
+      bookedFrom: '2026-01-04T22:00:00.000Z',
+      bookedTo: '2026-01-06T10:00:00.000Z',
+    });
+  });
+
+  // A day of the ledger is a Kyiv day: a payment booked at 00:30 in Kyiv is in
+  // the day the bank's customer saw on the clock, not in the one before.
+  it('puts a payment booked at half past midnight in Kyiv into that day', () => {
+    const parsed = listTransactionsSchema.safeParse({
+      query: { bookedFrom: '2026-03-11', bookedTo: '2026-03-12' },
+    });
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) return;
+    const booked = Date.parse('2026-03-10T22:30:00.000Z');
+    const { bookedFrom, bookedTo } = parsed.data.query;
+    expect(bookedFrom).toBe('2026-03-10T22:00:00.000Z');
+    expect(booked).toBeGreaterThanOrEqual(Date.parse(bookedFrom ?? ''));
+    expect(booked).toBeLessThan(Date.parse(bookedTo ?? ''));
+  });
+
+  it('refuses a booking bound that is not a date', () => {
+    for (const junk of ['1', '2026-13-01', '2026-01-05T10:00:00+0200']) {
+      expect(listTransactionsSchema.safeParse({ query: { bookedTo: junk } }).success).toBe(false);
+    }
+  });
+});

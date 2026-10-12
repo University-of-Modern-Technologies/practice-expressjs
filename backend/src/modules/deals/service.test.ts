@@ -1,0 +1,367 @@
+import { describe, expect, it, jest } from '@jest/globals';
+
+import { AppError } from '../../common/errors/index.js';
+import type { DomainEventNotification, DomainEventPublisher } from '../../common/types/index.js';
+import type { AuditService } from '../audit/service.js';
+import { createDealsService, type DealsDatabase } from './service.js';
+import type { CreateDealData, DealAccess } from './types.js';
+
+const access: DealAccess = { actorId: 'actor-1', scope: 'OWN' };
+const activeDeal = {
+  id: 'deal-1',
+  ownerId: access.actorId,
+  contactId: null,
+  title: 'Opportunity',
+  stage: 'LEAD' as const,
+  amount: '1000.00',
+  currency: 'USD',
+  probability: 10,
+  version: 1,
+  expectedCloseDate: null,
+  closedAt: null,
+  createdAt: new Date('2026-01-01T00:00:00Z'),
+  updatedAt: new Date('2026-01-01T00:00:00Z'),
+  deletedAt: null,
+};
+const updatedDeal = {
+  ...activeDeal,
+  probability: 25,
+  version: 2,
+  updatedAt: new Date('2026-01-02T00:00:00Z'),
+};
+const transitionedDeal = {
+  ...updatedDeal,
+  stage: 'QUALIFIED' as const,
+};
+
+const createHarness = (update: (args: unknown) => Promise<unknown>) => {
+  const findFirst = jest.fn(async (_args: unknown) => activeDeal);
+  const updateDeal = jest.fn(update);
+  const transaction = {
+    deal: { findFirst, update: updateDeal },
+    contact: { findFirst: jest.fn() },
+    user: { findFirst: jest.fn(async (_args: unknown) => null as { id: string } | null) },
+    auditLog: { create: jest.fn() },
+  };
+  const findMany = jest.fn(async (_args: unknown) => []);
+  const db = {
+    deal: { findFirst: jest.fn(), findMany, count: jest.fn(async () => 0) },
+    $transaction: jest.fn(async (callback: (value: typeof transaction) => Promise<unknown>) =>
+      callback(transaction),
+    ),
+  } as unknown as DealsDatabase;
+  const record = jest.fn(async () => undefined);
+  const audit = { record } as unknown as AuditService;
+  const publish = jest.fn((_event: DomainEventNotification): void => undefined);
+  const events: DomainEventPublisher = { publish };
+
+  return {
+    service: createDealsService(db, audit, events),
+    db,
+    transaction,
+    findMany,
+    findFirst,
+    updateDeal,
+    record,
+    publish,
+  };
+};
+
+describe('deals service correctness', () => {
+  it('rejects a non-LEAD initial stage even if validation is bypassed', async () => {
+    const harness = createHarness(async () => transitionedDeal);
+    const data = {
+      title: 'Closed opportunity',
+      stage: 'WON',
+      amount: '1000.00',
+    } as unknown as CreateDealData;
+
+    await expect(harness.service.create(access, data)).rejects.toMatchObject({
+      statusCode: 400,
+      code: 'INVALID_INITIAL_DEAL_STAGE',
+    });
+    expect(harness.db.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('guards regular updates by version and stage and increments the version', async () => {
+    const harness = createHarness(async () => updatedDeal);
+
+    const result = await harness.service.update(access, activeDeal.id, {
+      version: 1,
+      probability: 25,
+    });
+
+    expect(result).toMatchObject({ probability: 25, version: 2 });
+    expect(harness.updateDeal).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          id: activeDeal.id,
+          version: 1,
+          stage: 'LEAD',
+          deletedAt: null,
+          ownerId: access.actorId,
+        },
+        data: expect.objectContaining({
+          probability: 25,
+          version: { increment: 1 },
+        }),
+      }),
+    );
+  });
+
+  it('rejects an already stale regular update before writing', async () => {
+    const harness = createHarness(async () => updatedDeal);
+
+    await expect(
+      harness.service.update(access, activeDeal.id, { version: 2, probability: 25 }),
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      code: 'DEAL_CONCURRENT_MODIFICATION',
+    } satisfies Partial<AppError>);
+    expect(harness.updateDeal).not.toHaveBeenCalled();
+    expect(harness.record).not.toHaveBeenCalled();
+  });
+
+  it('atomically checks the version, previously read stage and access guards', async () => {
+    const harness = createHarness(async () => transitionedDeal);
+
+    const result = await harness.service.transition(access, activeDeal.id, {
+      version: 1,
+      stage: 'QUALIFIED',
+      probability: 25,
+    });
+
+    expect(result.stage).toBe('QUALIFIED');
+    expect(harness.updateDeal).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          id: activeDeal.id,
+          version: 1,
+          stage: 'LEAD',
+          deletedAt: null,
+          ownerId: access.actorId,
+        },
+        data: expect.objectContaining({ version: { increment: 1 } }),
+      }),
+    );
+    expect(harness.record).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns a conflict and skips audit when a concurrent transition wins first', async () => {
+    const harness = createHarness(async () => {
+      throw { code: 'P2025' };
+    });
+
+    await expect(
+      harness.service.transition(access, activeDeal.id, { version: 1, stage: 'QUALIFIED' }),
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      code: 'DEAL_CONCURRENT_MODIFICATION',
+    } satisfies Partial<AppError>);
+    expect(harness.record).not.toHaveBeenCalled();
+  });
+});
+
+describe('deals service domain event fan-out', () => {
+  it('announces a committed transition once the transaction has succeeded', async () => {
+    const harness = createHarness(async () => transitionedDeal);
+
+    await harness.service.transition(access, activeDeal.id, { version: 1, stage: 'QUALIFIED' });
+
+    expect(harness.publish).toHaveBeenCalledTimes(1);
+    expect(harness.publish).toHaveBeenCalledWith(
+      expect.objectContaining({
+        eventType: 'deal.stage_transitioned',
+        entityType: 'deal',
+        entityId: activeDeal.id,
+        actorId: access.actorId,
+        payload: expect.objectContaining({ from: 'LEAD', to: 'QUALIFIED' }),
+      }),
+    );
+  });
+
+  it('stays silent when the transaction is rejected', async () => {
+    const harness = createHarness(async () => {
+      throw { code: 'P2025' };
+    });
+
+    await expect(
+      harness.service.transition(access, activeDeal.id, { version: 1, stage: 'QUALIFIED' }),
+    ).rejects.toBeInstanceOf(AppError);
+    expect(harness.publish).not.toHaveBeenCalled();
+  });
+
+  it('keeps the business result when the secondary consumers fail', async () => {
+    const harness = createHarness(async () => transitionedDeal);
+    harness.publish.mockImplementation(() => {
+      throw new Error('event stream unreachable');
+    });
+
+    // The publisher owns its own failures; a broken stream must never turn a
+    // committed transition into a failed request.
+    await expect(
+      harness.service.transition(access, activeDeal.id, { version: 1, stage: 'QUALIFIED' }),
+    ).resolves.toMatchObject({ id: activeDeal.id, stage: 'QUALIFIED' });
+  });
+});
+
+describe('deal owners and search', () => {
+  const everything: DealAccess = { actorId: 'actor-1', scope: 'ALL' };
+
+  it('refuses an owner who is unknown or inactive on create', async () => {
+    const harness = createHarness(async () => updatedDeal);
+    const create = jest.fn();
+    (harness.transaction.deal as { create?: unknown }).create = create;
+
+    await expect(
+      harness.service.create(everything, { title: 'X', amount: '1.00', ownerId: 'owner-2' }),
+    ).rejects.toMatchObject({ statusCode: 404, code: 'DEAL_OWNER_NOT_FOUND' });
+    expect(harness.transaction.user.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'owner-2', isActive: true } }),
+    );
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('refuses an unknown owner on update without writing', async () => {
+    const harness = createHarness(async () => updatedDeal);
+
+    await expect(
+      harness.service.update(everything, activeDeal.id, { version: 1, ownerId: 'owner-2' }),
+    ).rejects.toMatchObject({ statusCode: 404, code: 'DEAL_OWNER_NOT_FOUND' });
+    expect(harness.updateDeal).not.toHaveBeenCalled();
+  });
+
+  it('searches titles for LIKE wildcards literally', async () => {
+    const harness = createHarness(async () => updatedDeal);
+
+    await harness.service.list(everything, {
+      page: 1,
+      pageSize: 20,
+      search: '50%_off',
+      sortBy: 'createdAt',
+      sortOrder: 'desc',
+    });
+
+    const [args] = harness.findMany.mock.calls[0] as unknown as [
+      { where: { OR: { title: { contains: string } }[] } },
+    ];
+    expect(args.where.OR[0]?.title.contains).toBe('50\\%\\_off');
+  });
+});
+
+describe('closed deals', () => {
+  it.each(['WON', 'LOST'] as const)(
+    'refuses to edit the fields of a %s deal and writes nothing',
+    async (stage) => {
+      const harness = createHarness(async () => updatedDeal);
+      harness.findFirst.mockImplementation(
+        async () =>
+          ({
+            ...activeDeal,
+            stage,
+            probability: stage === 'WON' ? 100 : 0,
+            closedAt: new Date('2026-01-03T00:00:00Z'),
+          }) as unknown as typeof activeDeal,
+      );
+
+      await expect(
+        harness.service.update(access, activeDeal.id, { version: 1, amount: '1.00' }),
+      ).rejects.toMatchObject({
+        statusCode: 409,
+        code: 'DEAL_CLOSED',
+        details: { stage },
+      } satisfies Partial<AppError>);
+      expect(harness.updateDeal).not.toHaveBeenCalled();
+      expect(harness.record).not.toHaveBeenCalled();
+      expect(harness.publish).not.toHaveBeenCalled();
+    },
+  );
+
+  it('still edits a deal that has not closed', async () => {
+    const harness = createHarness(async () => updatedDeal);
+    harness.findFirst.mockImplementation(
+      async () => ({ ...activeDeal, stage: 'PROPOSAL' }) as unknown as typeof activeDeal,
+    );
+
+    await expect(
+      harness.service.update(access, activeDeal.id, { version: 1, title: 'Renamed' }),
+    ).resolves.toMatchObject({ id: activeDeal.id });
+  });
+});
+
+describe('the organization currency', () => {
+  const withCurrency = (currency: string) => {
+    const harness = createHarness(async () => updatedDeal);
+    const create = jest.fn(async (args: { data: Record<string, unknown> }) => ({
+      ...activeDeal,
+      currency: args.data.currency as string,
+    }));
+    (harness.transaction.deal as { create?: unknown }).create = create;
+    const resolveOrganizationCurrency = jest.fn(async () => currency);
+    const service = createDealsService(
+      harness.db,
+      { record: harness.record } as unknown as AuditService,
+      { publish: harness.publish },
+      { resolveOrganizationCurrency },
+    );
+    return { ...harness, service, create, resolveOrganizationCurrency };
+  };
+
+  it('gives a new deal the organization currency when none is named', async () => {
+    const harness = withCurrency('EUR');
+
+    await expect(
+      harness.service.create(access, { title: 'X', amount: '10.00' }),
+    ).resolves.toMatchObject({ currency: 'EUR' });
+    expect(harness.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ currency: 'EUR' }) }),
+    );
+  });
+
+  it('refuses a new deal in another currency before writing anything', async () => {
+    const harness = withCurrency('EUR');
+
+    await expect(
+      harness.service.create(access, { title: 'X', amount: '10.00', currency: 'USD' }),
+    ).rejects.toMatchObject({
+      statusCode: 422,
+      code: 'CURRENCY_NOT_SUPPORTED',
+      details: { currency: 'USD', expected: 'EUR' },
+    } satisfies Partial<AppError>);
+    expect(harness.db.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('refuses to move an existing deal into another currency', async () => {
+    const harness = withCurrency('EUR');
+
+    await expect(
+      harness.service.update(access, activeDeal.id, { version: 1, currency: 'USD' }),
+    ).rejects.toMatchObject({ statusCode: 422, code: 'CURRENCY_NOT_SUPPORTED' });
+    expect(harness.updateDeal).not.toHaveBeenCalled();
+  });
+
+  it('falls back to USD until the organization setting is wired in', async () => {
+    const harness = createHarness(async () => updatedDeal);
+
+    await expect(
+      harness.service.create(access, { title: 'X', amount: '10.00', currency: 'EUR' }),
+    ).rejects.toMatchObject({ code: 'CURRENCY_NOT_SUPPORTED', details: { expected: 'USD' } });
+  });
+});
+
+describe('the expected close date', () => {
+  it('leaves the service as a calendar day, not as an instant', async () => {
+    const harness = createHarness(async () => updatedDeal);
+    const findOne = harness.db.deal.findFirst as unknown as jest.Mock<
+      (args: unknown) => Promise<unknown>
+    >;
+    findOne.mockImplementation(async () => ({
+      ...activeDeal,
+      expectedCloseDate: new Date('2026-12-31T00:00:00.000Z'),
+    }));
+
+    await expect(harness.service.getById(access, activeDeal.id)).resolves.toMatchObject({
+      expectedCloseDate: '2026-12-31',
+    });
+  });
+});
