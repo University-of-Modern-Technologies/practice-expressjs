@@ -1,0 +1,29 @@
+{
+  "name": "practice-crm",
+  "private": true,
+  "description": "Навчальна CRM: запуск стека, локальна розробка й обслуговування",
+  "type": "module",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "setup": "node scripts/stack.mjs setup",
+    "start": "node scripts/stack.mjs start",
+    "stop": "node scripts/stack.mjs stop",
+    "prod:start": "node scripts/stack.mjs prod:start",
+    "prod:stop": "node scripts/stack.mjs prod:stop",
+    "build": "node scripts/stack.mjs build",
+    "test": "node scripts/stack.mjs test",
+    "start:api": "node scripts/stack.mjs start:api",
+    "start:infra": "node scripts/stack.mjs start:infra",
+    "dev": "npm --prefix backend run dev",
+    "dev:web": "npm --prefix frontend run dev",
+    "logs": "node scripts/stack.mjs logs",
+    "ps": "node scripts/stack.mjs ps",
+    "clean": "node scripts/stack.mjs clean",
+    "tools": "node scripts/stack.mjs tools",
+    "db:migrate": "node scripts/stack.mjs db:migrate",
+    "db:seed:demo": "node scripts/stack.mjs db:seed:demo",
+    "install:all": "npm --prefix backend ci && npm --prefix frontend ci"
+  }
+}
