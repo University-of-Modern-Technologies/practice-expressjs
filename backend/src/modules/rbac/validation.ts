@@ -2,15 +2,25 @@ import type { RequestHandler } from 'express';
 import { z } from 'zod';
 import { createPermissionKey } from './types.js';
 
+const PERMISSION_PART_PATTERN = /^[a-z][a-z0-9_-]*$/;
+const PERMISSION_PART_MESSAGE =
+  'Must start with a lowercase letter and contain only lowercase letters, digits, underscores, or hyphens';
+
+// In a body, surrounding whitespace is dropped before the part is checked.
 const permissionPartSchema = z
   .string()
   .trim()
   .min(1)
   .max(64)
-  .regex(
-    /^[a-z][a-z0-9_-]*$/,
-    'Must start with a lowercase letter and contain only lowercase letters, digits, underscores, or hyphens',
-  );
+  .regex(PERMISSION_PART_PATTERN, PERMISSION_PART_MESSAGE);
+
+// A path segment is taken as sent: a resource with spaces around it is not
+// one, and trimming it would answer for a permission the caller did not name.
+const permissionPathPartSchema = z
+  .string()
+  .min(1)
+  .max(64)
+  .regex(PERMISSION_PART_PATTERN, PERMISSION_PART_MESSAGE);
 
 const permissionAssignmentSchema = z
   .object({
@@ -49,8 +59,8 @@ const roleIdParamsSchema = z.object({ id: z.string().uuid() }).strict();
 export const permissionKeySchema = z.object({
   params: z
     .object({
-      resource: permissionPartSchema,
-      action: permissionPartSchema,
+      resource: permissionPathPartSchema,
+      action: permissionPathPartSchema,
     })
     .strict(),
 });

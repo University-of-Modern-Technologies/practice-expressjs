@@ -1,9 +1,13 @@
 import { z } from 'zod';
-import { callDirections, callDispositions, callSortFields } from './types.js';
+import { callDirections, callDispositions, callSortFields, MAX_CALL_PAGE } from './types.js';
 
 const idParams = z.object({ id: z.string().uuid() });
 const timestamp = z.string().datetime({ offset: true });
-const version = z.coerce.number().int().positive();
+// A query string carries text, so the version there is read from it; a JSON
+// body has a number type of its own, and `"3"`, `null` or `true` in its place is
+// a malformed request rather than a value to convert.
+const queryVersion = z.coerce.number().int().positive();
+const version = z.number().int().positive();
 const boolean = z
   .union([z.boolean(), z.enum(['true', 'false'])])
   .transform((value) => value === true || value === 'true');
@@ -11,7 +15,7 @@ const boolean = z
 export const listCallsSchema = z.object({
   query: z
     .object({
-      page: z.coerce.number().int().min(1).default(1),
+      page: z.coerce.number().int().min(1).max(MAX_CALL_PAGE).default(1),
       pageSize: z.coerce.number().int().min(1).max(100).default(20),
       search: z.string().trim().min(1).max(160).optional(),
       direction: z.enum(callDirections).optional(),
@@ -87,5 +91,5 @@ export const getCallRecordingSchema = z.object({ params: idParams });
 
 export const deleteCallSchema = z.object({
   params: idParams,
-  query: z.object({ version }),
+  query: z.object({ version: queryVersion }),
 });

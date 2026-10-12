@@ -16,12 +16,22 @@ export class RetryableCallProviderFailure extends Error {
   }
 }
 
+/** Longest single pause between two attempts, however large the base. */
+export const MAX_RETRY_BACKOFF_MS = 5_000;
+/**
+ * Longest a fetch may keep retrying, counted from its first attempt. A sync
+ * runs inside a request, and a caller waiting minutes for "unavailable" is
+ * worse served than one told so promptly.
+ */
+export const MAX_RETRY_TOTAL_MS = 30_000;
+
 export interface WithRetryOptions {
   readonly maxAttempts?: number | undefined;
   readonly backoffMs?: number | undefined;
   readonly logger?: Logger | undefined;
-  /** Injectable sleep keeps the tests deterministic. */
+  /** Injectable sleep and clock keep the tests deterministic. */
   readonly delay?: ((ms: number) => Promise<void>) | undefined;
+  readonly now?: (() => number) | undefined;
 }
 
 const defaultDelay = (ms: number): Promise<void> =>
@@ -36,13 +46,14 @@ const defaultDelay = (ms: number): Promise<void> =>
  * is safe to repeat.
  */
 export const withRetry = (provider: CallProvider, options: WithRetryOptions = {}): CallProvider => {
-  const { maxAttempts = 1, backoffMs = 0, logger, delay = defaultDelay } = options;
+  const { maxAttempts = 1, backoffMs = 0, logger, delay = defaultDelay, now = Date.now } = options;
   const attempts = Math.max(1, maxAttempts);
 
   return {
     name: provider.name,
     async fetchCalls(request) {
       let lastFailure: Error = callProviderUnavailableError();
+      const startedAt = now();
 
       for (let attempt = 1; attempt <= attempts; attempt += 1) {
         try {
@@ -53,7 +64,10 @@ export const withRetry = (provider: CallProvider, options: WithRetryOptions = {}
           lastFailure = error.failure;
           logger?.warn({ attempt }, 'Telephony journal fetch failed; retrying');
           if (attempt === attempts) throw lastFailure;
-          await delay(backoffMs * 2 ** (attempt - 1));
+          const wait = Math.min(MAX_RETRY_BACKOFF_MS, backoffMs * 2 ** (attempt - 1));
+          // Another attempt that could only start past the budget is not made.
+          if (now() - startedAt + wait > MAX_RETRY_TOTAL_MS) throw lastFailure;
+          await delay(wait);
         }
       }
 

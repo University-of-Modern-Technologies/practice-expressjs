@@ -63,11 +63,23 @@ export interface MatchableOrder {
 }
 
 /**
+ * The whitespace folded away before comparing, listed character by character
+ * rather than left to `\s`. A shorthand class means something slightly
+ * different in every regular-expression engine, and the sibling backend has to
+ * fold a payer's text to exactly the same string this one does — otherwise
+ * the same statement reconciles differently depending on which backend ran it.
+ */
+const FOLDED_WHITESPACE =
+  /[\t\n\v\f\r \u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]+/g;
+
+/**
  * Case and spacing are noise here: a teller types `ORD 2026 0001`, an online
  * form sends `ord-2026-0001`, and both mean the same order. Folding both away
- * is what lets one comparison serve every spelling.
+ * is what lets one comparison serve every spelling. Lower-casing comes first,
+ * so the case of a letter is decided while its neighbours are still beside it.
  */
-const normalize = (value: string): string => value.toLowerCase().replace(/\s+/g, '');
+export const foldForMatching = (value: string): string =>
+  value.toLowerCase().replace(FOLDED_WHITESPACE, '');
 
 export const isMatchableOrderStatus = (status: string): boolean =>
   (MATCHABLE_ORDER_STATUSES as readonly string[]).includes(status);
@@ -75,9 +87,17 @@ export const isMatchableOrderStatus = (status: string): boolean =>
 export const isReconcilableDirection = (direction: TransactionDirection): boolean =>
   direction === RECONCILABLE_DIRECTION;
 
-/** Condition 2, first half: the reference quotes the order number. */
-export const referenceMentionsOrder = (reference: string, orderNumber: string): boolean =>
-  normalize(reference).includes(normalize(orderNumber));
+/**
+ * Condition 2, first half: the reference quotes the order number.
+ *
+ * An order number that folds to nothing quotes nothing. Every string contains
+ * the empty string, so without the guard an order with a blank number would
+ * be "mentioned" by every payment ever made.
+ */
+export const referenceMentionsOrder = (reference: string, orderNumber: string): boolean => {
+  const quoted = foldForMatching(orderNumber);
+  return quoted !== '' && foldForMatching(reference).includes(quoted);
+};
 
 /**
  * Condition 2, second half: the payer is named like the order's customer.
@@ -91,10 +111,10 @@ export const counterpartyMatchesContact = (
   contactName: string | null,
   contactCompany: string | null = null,
 ): boolean => {
-  const payer = normalize(counterpartyName);
+  const payer = foldForMatching(counterpartyName);
   if (!payer) return false;
   return [contactName, contactCompany].some(
-    (known) => known !== null && payer === normalize(known),
+    (known) => known !== null && payer === foldForMatching(known),
   );
 };
 

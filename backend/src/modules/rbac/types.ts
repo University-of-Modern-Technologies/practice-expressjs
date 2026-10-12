@@ -20,6 +20,17 @@ export const parsePermissionKey = (key: string): PermissionKeyParts | null => {
   return { resource: key.slice(0, separator), action: key.slice(separator + 1) };
 };
 
+/** Who is changing users or roles, as the audit trail records it. */
+export interface Actor {
+  readonly actorId: string;
+  readonly ipAddress: string | null;
+}
+
+/** Audit vocabulary of role administration. */
+export const ROLE_ENTITY_TYPE = 'role';
+export const ROLE_CREATED = 'role.created';
+export const ROLE_PERMISSIONS_REPLACED = 'role.permissions_replaced';
+
 export interface PermissionRequirement {
   resource: string;
   action: string;

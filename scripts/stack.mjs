@@ -7,7 +7,7 @@
 
 import { spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, rmdirSync, statSync, writeFileSync } from 'node:fs';
 import { connect, createServer } from 'node:net';
 import path from 'node:path';
 import { createInterface } from 'node:readline/promises';
@@ -45,13 +45,28 @@ function fail(message, code = 1) {
   process.exit(code);
 }
 
+// The rules Docker Compose reads `.env` by, so this script and the stack see
+// the same values: surrounding spaces are trimmed, matching quotes removed, and
+// `#` starts a comment only after a space in an unquoted value.
+const ENV_LINE = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=(.*)$/;
+const QUOTED_VALUE = /^(['"])(.*?)\1(?:\s+#.*)?$/;
+
+function parseEnvValue(raw) {
+  const text = raw.trim();
+  const quoted = QUOTED_VALUE.exec(text);
+  return quoted ? quoted[2] : text.replace(/\s+#.*$/, '').trim();
+}
+
+// A blank value is left out, so every caller falls back to its default.
 function readEnv(file = '.env') {
   const target = path.join(root, file);
   if (!existsSync(target)) return {};
   const values = {};
   for (const line of readFileSync(target, 'utf8').split(/\r?\n/)) {
-    const match = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$/.exec(line);
-    if (match) values[match[1]] = match[2].replace(/^(['"])(.*)\1$/, '$2');
+    const match = ENV_LINE.exec(line);
+    if (!match) continue;
+    const value = parseEnvValue(match[2]);
+    if (value !== '') values[match[1]] = value;
   }
   return values;
 }
@@ -130,7 +145,18 @@ function writeEnvFile(source, target, secrets) {
 
 function ensurePortainerPassword() {
   const target = path.join(root, portainerPasswordFile);
-  if (!existsSync(target)) writeFileSync(target, randomBytes(12).toString('base64url'));
+  // Docker creates an empty directory in place of a bind-mounted file that is
+  // missing; a stack started that way once leaves it behind.
+  if (existsSync(target) && statSync(target).isDirectory()) {
+    try {
+      rmdirSync(target);
+    } catch {
+      fail(`${portainerPasswordFile} is a directory that is not empty. Remove it and try again.`);
+    }
+  }
+  if (!existsSync(target) || readFileSync(target, 'utf8').trim() === '') {
+    writeFileSync(target, randomBytes(12).toString('base64url'));
+  }
   return readFileSync(target, 'utf8').trim();
 }
 

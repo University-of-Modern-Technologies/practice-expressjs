@@ -3,7 +3,9 @@ import { z } from 'zod';
 import { stockMovementTypes } from './types.js';
 
 const uuid = z.string().uuid();
-const quantity = z.coerce.number().int().positive().max(1_000_000_000);
+/** A single movement may never be larger than this, in either direction. */
+const MAX_MOVEMENT_QUANTITY = 1_000_000_000;
+const quantity = z.coerce.number().int().positive().max(MAX_MOVEMENT_QUANTITY);
 const note = z.string().trim().min(1).max(255);
 const referenceType = z.string().trim().min(1).max(64);
 const timestamp = z.string().datetime({ offset: true });
@@ -129,8 +131,12 @@ export const adjustStockSchema = z.object({
     delta: z.coerce
       .number()
       .int()
+      .min(-MAX_MOVEMENT_QUANTITY)
+      .max(MAX_MOVEMENT_QUANTITY)
       .refine((value) => value !== 0, { message: 'delta must not be zero' })
-      .meta({ description: 'Знакова корекція; нуль не приймається.' }),
+      .meta({
+        description: 'Знакова корекція в межах ±1 000 000 000; нуль не приймається.',
+      }),
     // Deliberately not optional: an unexplained correction is not auditable.
     note,
     referenceType: referenceType.optional(),

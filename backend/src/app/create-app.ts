@@ -76,6 +76,9 @@ export const createApp = ({
   const app = express();
 
   app.disable('x-powered-by');
+  // Only the configured proxies are believed about who the client is; with
+  // none configured the peer address is the client, whatever the headers say.
+  app.set('trust proxy', config.trustedProxies.length > 0 ? [...config.trustedProxies] : false);
   // The correlation id is established before anything else so that every log
   // line and every metric sample produced downstream can be tied to it.
   app.use(createRequestId());

@@ -58,3 +58,21 @@ export interface UpdateUserData {
   password?: string;
   roleIds?: string[];
 }
+
+/** Machine codes of the refusals this module adds on top of the shared ones. */
+export const CANNOT_DISABLE_SELF = 'CANNOT_DISABLE_SELF';
+export const LAST_ACTIVE_ADMIN = 'LAST_ACTIVE_ADMIN';
+
+/**
+ * The role whose last active holder may not be disabled or stripped of it:
+ * without one, nobody is left who can administer accounts.
+ */
+export const ADMIN_ROLE_NAME = 'admin';
+
+/** Audit vocabulary of this module. */
+export const USER_ENTITY_TYPE = 'user';
+export const SESSION_ENTITY_TYPE = 'session';
+export const USER_CREATED = 'user.created';
+export const USER_UPDATED = 'user.updated';
+export const USER_DISABLED = 'user.disabled';
+export const SESSION_REVOKED = 'session.revoked';

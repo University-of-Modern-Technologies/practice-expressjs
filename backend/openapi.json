@@ -4427,6 +4427,7 @@
             "name": "page",
             "schema": {
               "default": 1,
+              "maximum": 1000000,
               "minimum": 1,
               "type": "integer"
             }
@@ -5370,6 +5371,7 @@
             "name": "page",
             "schema": {
               "default": 1,
+              "maximum": 1000000,
               "minimum": 1,
               "type": "integer"
             }
@@ -5849,6 +5851,7 @@
                     "anyOf": [
                       {
                         "maxLength": 160,
+                        "minLength": 1,
                         "type": "string"
                       },
                       {
@@ -6012,6 +6015,7 @@
             "name": "page",
             "schema": {
               "default": 1,
+              "maximum": 1000000,
               "minimum": 1,
               "type": "integer"
             }
@@ -6103,7 +6107,7 @@
             "in": "query",
             "name": "expectedCloseFrom",
             "schema": {
-              "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+              "format": "date",
               "type": "string"
             }
           },
@@ -6111,7 +6115,7 @@
             "in": "query",
             "name": "expectedCloseTo",
             "schema": {
-              "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+              "format": "date",
               "type": "string"
             }
           },
@@ -6257,7 +6261,7 @@
                     "type": "string"
                   },
                   "expectedCloseDate": {
-                    "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+                    "format": "date",
                     "type": "string"
                   },
                   "ownerId": {
@@ -6601,7 +6605,7 @@
                   "expectedCloseDate": {
                     "anyOf": [
                       {
-                        "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+                        "format": "date",
                         "type": "string"
                       },
                       {
@@ -7483,6 +7487,7 @@
             "in": "query",
             "name": "bookedTo",
             "schema": {
+              "description": "Виключна межа: до вибірки потрапляють транзакції, проведені раніше за неї.",
               "format": "date-time",
               "type": "string"
             }
@@ -7980,6 +7985,7 @@
             "name": "page",
             "schema": {
               "default": 1,
+              "maximum": 1000000,
               "minimum": 1,
               "type": "integer"
             }
@@ -9601,7 +9607,7 @@
         ]
       },
       "post": {
-        "description": "Потребує дозволу `orders:write`. Номер, статус і суми обчислює сервер: замовлення створюється у статусі DRAFT. Помилки: 404 `CONTACT_NOT_FOUND`, `DEAL_NOT_FOUND`, `PRODUCT_NOT_FOUND`; 409 `PRODUCT_INACTIVE`, `ORDER_CURRENCY_MISMATCH`, `ORDER_ITEM_DUPLICATE`, `ORDER_NUMBER_UNAVAILABLE`.",
+        "description": "Потребує дозволу `orders:write`. Номер, статус і суми обчислює сервер: замовлення створюється у статусі DRAFT. Власник — наявний активний користувач. Помилки: 404 `CONTACT_NOT_FOUND`, `DEAL_NOT_FOUND`, `PRODUCT_NOT_FOUND`, `ORDER_OWNER_NOT_FOUND`; 409 `PRODUCT_INACTIVE`, `ORDER_CURRENCY_MISMATCH`, `ORDER_ITEM_DUPLICATE`, `ORDER_NUMBER_UNAVAILABLE`; 400 `ORDER_TOTALS_INVALID` — знижка більша за підсумок; 400 `ORDER_AMOUNT_OUT_OF_RANGE` — сума рядка, підсумок або разом перевищили б 999999999999.99.",
         "operationId": "post_api_v1_orders",
         "requestBody": {
           "content": {
@@ -9951,7 +9957,7 @@
         ]
       },
       "patch": {
-        "description": "Потребує дозволу `orders:write`. Статус, номер і суми не приймаються від клієнта. `version` обовʼязковий: розбіжність із поточною версією дає 409 `ORDER_CONCURRENT_MODIFICATION`. Рядки та грошові поля змінюються лише поки замовлення в статусі DRAFT, інакше 409 `ORDER_NOT_EDITABLE`. Помилки: 404 `ORDER_NOT_FOUND`, `CONTACT_NOT_FOUND`, `DEAL_NOT_FOUND`; 409 `ORDER_CURRENCY_MISMATCH`.",
+        "description": "Потребує дозволу `orders:write`. Статус, номер і суми не приймаються від клієнта. `version` обовʼязковий: розбіжність із поточною версією дає 409 `ORDER_CONCURRENT_MODIFICATION`. Рядки та грошові поля змінюються лише поки замовлення в статусі DRAFT, інакше 409 `ORDER_NOT_EDITABLE`. Помилки: 404 `ORDER_NOT_FOUND`, `CONTACT_NOT_FOUND`, `DEAL_NOT_FOUND`, `ORDER_OWNER_NOT_FOUND`; 409 `ORDER_CURRENCY_MISMATCH`; 400 `ORDER_TOTALS_INVALID` — надіслана знижка більша за підсумок.",
         "operationId": "patch_api_v1_orders_id",
         "parameters": [
           {
@@ -10231,7 +10237,7 @@
     },
     "/api/v1/orders/{id}/items": {
       "post": {
-        "description": "Потребує дозволу `orders:write`. Ціна й назва фіксуються знімком каталогу. `version` обовʼязковий: розбіжність із поточною версією дає 409 `ORDER_CONCURRENT_MODIFICATION`. Рядки та грошові поля змінюються лише поки замовлення в статусі DRAFT, інакше 409 `ORDER_NOT_EDITABLE`. Помилки: 404 `ORDER_NOT_FOUND`, `PRODUCT_NOT_FOUND`; 409 `ORDER_ITEM_DUPLICATE`, `PRODUCT_INACTIVE`, `ORDER_CURRENCY_MISMATCH`.",
+        "description": "Потребує дозволу `orders:write`. Ціна й назва фіксуються знімком каталогу. `version` обовʼязковий: розбіжність із поточною версією дає 409 `ORDER_CONCURRENT_MODIFICATION`. Рядки та грошові поля змінюються лише поки замовлення в статусі DRAFT, інакше 409 `ORDER_NOT_EDITABLE`. Помилки: 404 `ORDER_NOT_FOUND`, `PRODUCT_NOT_FOUND`; 409 `ORDER_ITEM_DUPLICATE` (перевіряється раніше за стан товару в каталозі), `PRODUCT_INACTIVE`, `ORDER_CURRENCY_MISMATCH`; 400 `ORDER_AMOUNT_OUT_OF_RANGE` — сума рядка, підсумок або разом перевищили б 999999999999.99.",
         "operationId": "post_api_v1_orders_id_items",
         "parameters": [
           {
@@ -10367,7 +10373,7 @@
     },
     "/api/v1/orders/{id}/items/{itemId}": {
       "delete": {
-        "description": "Потребує дозволу `orders:write`. `version` обовʼязковий: розбіжність із поточною версією дає 409 `ORDER_CONCURRENT_MODIFICATION`. Рядки та грошові поля змінюються лише поки замовлення в статусі DRAFT, інакше 409 `ORDER_NOT_EDITABLE`. Помилки: 404 `ORDER_NOT_FOUND`, `ORDER_ITEM_NOT_FOUND`.",
+        "description": "Потребує дозволу `orders:write`. `version` обовʼязковий: розбіжність із поточною версією дає 409 `ORDER_CONCURRENT_MODIFICATION`. Рядки та грошові поля змінюються лише поки замовлення в статусі DRAFT, інакше 409 `ORDER_NOT_EDITABLE`. Якщо після зміни рядків знижка перевищила б підсумок, її зменшено до підсумку. Помилки: 404 `ORDER_NOT_FOUND`, `ORDER_ITEM_NOT_FOUND`.",
         "operationId": "delete_api_v1_orders_id_items_itemid",
         "parameters": [
           {
@@ -10489,7 +10495,7 @@
         ]
       },
       "patch": {
-        "description": "Потребує дозволу `orders:write`. `version` обовʼязковий: розбіжність із поточною версією дає 409 `ORDER_CONCURRENT_MODIFICATION`. Рядки та грошові поля змінюються лише поки замовлення в статусі DRAFT, інакше 409 `ORDER_NOT_EDITABLE`. Помилки: 404 `ORDER_NOT_FOUND`, `ORDER_ITEM_NOT_FOUND`.",
+        "description": "Потребує дозволу `orders:write`. `version` обовʼязковий: розбіжність із поточною версією дає 409 `ORDER_CONCURRENT_MODIFICATION`. Рядки та грошові поля змінюються лише поки замовлення в статусі DRAFT, інакше 409 `ORDER_NOT_EDITABLE`. Якщо після зміни рядків знижка перевищила б підсумок, її зменшено до підсумку. Помилки: 404 `ORDER_NOT_FOUND`, `ORDER_ITEM_NOT_FOUND`; 400 `ORDER_AMOUNT_OUT_OF_RANGE` — сума рядка, підсумок або разом перевищили б 999999999999.99.",
         "operationId": "patch_api_v1_orders_id_items_itemid",
         "parameters": [
           {
@@ -10629,7 +10635,7 @@
     },
     "/api/v1/orders/{id}/transitions": {
       "post": {
-        "description": "Потребує дозволу `orders:write`. Дозволені переходи: DRAFT → CONFIRMED/CANCELLED, CONFIRMED → PAID/CANCELLED, PAID → FULFILLED/CANCELLED; FULFILLED і CANCELLED — кінцеві. `version` обовʼязковий: розбіжність із поточною версією дає 409 `ORDER_CONCURRENT_MODIFICATION`. Помилки: 404 `ORDER_NOT_FOUND`; 409 `INVALID_ORDER_STATUS_TRANSITION`, `ORDER_HAS_NO_ITEMS`.",
+        "description": "Потребує дозволу `orders:write`. Дозволені переходи: DRAFT → CONFIRMED/CANCELLED, CONFIRMED → PAID/CANCELLED, PAID → FULFILLED/CANCELLED; FULFILLED і CANCELLED — кінцеві. Підтвердити можна лише чернетку з рядками; скасувати — і порожню. `version` обовʼязковий: розбіжність із поточною версією дає 409 `ORDER_CONCURRENT_MODIFICATION`. Помилки: 404 `ORDER_NOT_FOUND`; 409 `INVALID_ORDER_STATUS_TRANSITION`, `ORDER_HAS_NO_ITEMS`.",
         "operationId": "post_api_v1_orders_id_transitions",
         "parameters": [
           {
@@ -10962,7 +10968,7 @@
         ]
       },
       "post": {
-        "description": "Потребує дозволу `products:write`. SKU нормалізується до верхнього регістру. Помилки: 409 `PRODUCT_SKU_TAKEN`, 400 `INVALID_PRODUCT_PRICE`.",
+        "description": "Потребує дозволу `products:write`. SKU нормалізується до верхнього регістру. Помилки: 409 `PRODUCT_SKU_TAKEN`; 409 `PRODUCT_SKU_RETIRED` — SKU належав видаленому товару й повторно не видається; 400 `INVALID_PRODUCT_PRICE`.",
         "operationId": "post_api_v1_products",
         "requestBody": {
           "content": {
@@ -12859,6 +12865,16 @@
             },
             "description": "The requested resource was not found"
           },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The operation conflicts with the current state of the resource"
+          },
           "500": {
             "content": {
               "application/json": {
@@ -13397,7 +13413,7 @@
     },
     "/api/v1/warehouse/stock/adjust": {
       "post": {
-        "description": "Потребує дозволу `warehouse:write`. Записує знакову корекцію (рух типу ADJUSTMENT). `delta` не може бути нулем (400 `INVALID_STOCK_ADJUSTMENT`), `note` обовʼязковий (400 `STOCK_ADJUSTMENT_NOTE_REQUIRED`). Корекція в мінус нижче наявного залишку — 409 `INSUFFICIENT_STOCK`. Помилки: 404 `WAREHOUSE_NOT_FOUND`, `PRODUCT_NOT_FOUND`; 409 `WAREHOUSE_INACTIVE`, `STOCK_CONCURRENT_MODIFICATION` — рівень запасів змінив паралельний запит, операцію треба повторити.",
+        "description": "Потребує дозволу `warehouse:write`. Записує знакову корекцію (рух типу ADJUSTMENT). `delta` не може бути нулем (400 `INVALID_STOCK_ADJUSTMENT`), `note` обовʼязковий (400 `STOCK_ADJUSTMENT_NOTE_REQUIRED`). Корекція в мінус нижче наявного залишку — 409 `INSUFFICIENT_STOCK`. Помилки: 404 `WAREHOUSE_NOT_FOUND`, `PRODUCT_NOT_FOUND`; 409 `WAREHOUSE_INACTIVE`, `STOCK_CONCURRENT_MODIFICATION` — рівень запасів змінив паралельний запит, операцію треба повторити; 400 `STOCK_QUANTITY_OUT_OF_RANGE` — залишок перевищив би 2147483647.",
         "operationId": "post_api_v1_warehouse_stock_adjust",
         "requestBody": {
           "content": {
@@ -13405,7 +13421,9 @@
               "schema": {
                 "properties": {
                   "delta": {
-                    "description": "Знакова корекція; нуль не приймається.",
+                    "description": "Знакова корекція в межах ±1 000 000 000; нуль не приймається.",
+                    "maximum": 1000000000,
+                    "minimum": -1000000000,
                     "type": "integer"
                   },
                   "note": {
@@ -13536,7 +13554,7 @@
     },
     "/api/v1/warehouse/stock/issue": {
       "post": {
-        "description": "Потребує дозволу `warehouse:write`. Зменшує залишок і записує рух типу ISSUE. З `fromReservation: true` водночас зменшується резерв, і тоді `referenceType` та `referenceId` обовʼязкові. Брак залишку — 409 `INSUFFICIENT_STOCK`, брак резерву — 409 `INSUFFICIENT_RESERVATION`. Помилки: 404 `WAREHOUSE_NOT_FOUND`, `PRODUCT_NOT_FOUND`; 409 `WAREHOUSE_INACTIVE`, `STOCK_CONCURRENT_MODIFICATION` — рівень запасів змінив паралельний запит, операцію треба повторити.",
+        "description": "Потребує дозволу `warehouse:write`. Зменшує залишок і записує рух типу ISSUE. З `fromReservation: true` водночас зменшується резерв, і тоді `referenceType` та `referenceId` обовʼязкові. Брак залишку — 409 `INSUFFICIENT_STOCK`, брак резерву — 409 `INSUFFICIENT_RESERVATION`. Помилки: 404 `WAREHOUSE_NOT_FOUND`, `PRODUCT_NOT_FOUND`; 409 `WAREHOUSE_INACTIVE`, `STOCK_CONCURRENT_MODIFICATION` — рівень запасів змінив паралельний запит, операцію треба повторити; 400 `STOCK_QUANTITY_OUT_OF_RANGE` — залишок перевищив би 2147483647.",
         "operationId": "post_api_v1_warehouse_stock_issue",
         "requestBody": {
           "content": {
@@ -13678,7 +13696,7 @@
     },
     "/api/v1/warehouse/stock/receive": {
       "post": {
-        "description": "Потребує дозволу `warehouse:write`. Збільшує залишок на складі й записує рух типу RECEIPT. Помилки: 404 `WAREHOUSE_NOT_FOUND`, `PRODUCT_NOT_FOUND`; 409 `WAREHOUSE_INACTIVE`, `STOCK_CONCURRENT_MODIFICATION` — рівень запасів змінив паралельний запит, операцію треба повторити.",
+        "description": "Потребує дозволу `warehouse:write`. Збільшує залишок на складі й записує рух типу RECEIPT. Помилки: 404 `WAREHOUSE_NOT_FOUND`, `PRODUCT_NOT_FOUND`; 409 `WAREHOUSE_INACTIVE`, `STOCK_CONCURRENT_MODIFICATION` — рівень запасів змінив паралельний запит, операцію треба повторити; 400 `STOCK_QUANTITY_OUT_OF_RANGE` — залишок перевищив би 2147483647.",
         "operationId": "post_api_v1_warehouse_stock_receive",
         "requestBody": {
           "content": {
@@ -13817,7 +13835,7 @@
     },
     "/api/v1/warehouse/stock/release": {
       "post": {
-        "description": "Потребує дозволу `warehouse:write`. Зменшує резерв і записує рух типу RELEASE. Спроба зняти більше, ніж зарезервовано, — 409 `INSUFFICIENT_RESERVATION`. Помилки: 404 `WAREHOUSE_NOT_FOUND`, `PRODUCT_NOT_FOUND`; 409 `WAREHOUSE_INACTIVE`, `STOCK_CONCURRENT_MODIFICATION` — рівень запасів змінив паралельний запит, операцію треба повторити.",
+        "description": "Потребує дозволу `warehouse:write`. Зменшує резерв і записує рух типу RELEASE. Спроба зняти більше, ніж зарезервовано, — 409 `INSUFFICIENT_RESERVATION`. Помилки: 404 `WAREHOUSE_NOT_FOUND`, `PRODUCT_NOT_FOUND`; 409 `WAREHOUSE_INACTIVE`, `STOCK_CONCURRENT_MODIFICATION` — рівень запасів змінив паралельний запит, операцію треба повторити; 400 `STOCK_QUANTITY_OUT_OF_RANGE` — залишок перевищив би 2147483647.",
         "operationId": "post_api_v1_warehouse_stock_release",
         "requestBody": {
           "content": {
@@ -13958,7 +13976,7 @@
     },
     "/api/v1/warehouse/stock/reserve": {
       "post": {
-        "description": "Потребує дозволу `warehouse:write`. Збільшує резерв і записує рух типу RESERVATION. Резерв завжди привʼязаний до зовнішнього обʼєкта, тому посилання обовʼязкове. Брак доступного залишку — 409 `INSUFFICIENT_STOCK`. Помилки: 404 `WAREHOUSE_NOT_FOUND`, `PRODUCT_NOT_FOUND`; 409 `WAREHOUSE_INACTIVE`, `STOCK_CONCURRENT_MODIFICATION` — рівень запасів змінив паралельний запит, операцію треба повторити.",
+        "description": "Потребує дозволу `warehouse:write`. Збільшує резерв і записує рух типу RESERVATION. Резерв завжди привʼязаний до зовнішнього обʼєкта, тому посилання обовʼязкове. Брак доступного залишку — 409 `INSUFFICIENT_STOCK`. Помилки: 404 `WAREHOUSE_NOT_FOUND`, `PRODUCT_NOT_FOUND`; 409 `WAREHOUSE_INACTIVE`, `STOCK_CONCURRENT_MODIFICATION` — рівень запасів змінив паралельний запит, операцію треба повторити; 400 `STOCK_QUANTITY_OUT_OF_RANGE` — залишок перевищив би 2147483647.",
         "operationId": "post_api_v1_warehouse_stock_reserve",
         "requestBody": {
           "content": {

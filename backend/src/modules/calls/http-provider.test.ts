@@ -98,3 +98,39 @@ describe('http call provider', () => {
     expect(calls()).toBe(1);
   });
 });
+
+describe('http call provider regressions', () => {
+  const answering = (body: unknown) => transportThat(() => ({ status: 200, body })).transport;
+
+  it.each(['', '   '])('reads an empty recording link %p as no recording', async (link) => {
+    const provider = createProvider(answering([{ ...validRecord, recordingUrl: link }]));
+
+    const [record] = await provider.fetchCalls({ limit: 10 });
+
+    expect(record?.recordingUrl).toBeUndefined();
+  });
+
+  it('accepts null where a provider has no recording', async () => {
+    const provider = createProvider(answering([{ ...validRecord, recordingUrl: null }]));
+
+    const [record] = await provider.fetchCalls({ limit: 10 });
+
+    expect(record?.recordingUrl).toBeUndefined();
+  });
+
+  it.each(['javascript:alert(1)', 'file:///etc/passwd', 'ftp://host/a.mp3', 'recordings/1'])(
+    'refuses %p as a recording link',
+    async (link) => {
+      const provider = createProvider(answering([{ ...validRecord, recordingUrl: link }]));
+
+      await expect(provider.fetchCalls({ limit: 10 })).rejects.toMatchObject(unavailable);
+    },
+  );
+
+  it('refuses a batch longer than the limit it was asked for', async () => {
+    const batch = [1, 2, 3].map((index) => ({ ...validRecord, externalId: `ext-${index}` }));
+    const provider = createProvider(answering(batch));
+
+    await expect(provider.fetchCalls({ limit: 2 })).rejects.toMatchObject(unavailable);
+  });
+});

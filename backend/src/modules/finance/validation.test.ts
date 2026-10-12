@@ -1,5 +1,6 @@
 import { describe, expect, it } from '@jest/globals';
 
+import { DEFAULT_REPORT_WINDOW_FROM, defaultReportWindowTo } from '../../common/reporting/index.js';
 import {
   MAX_SUMMARY_RANGE_DAYS,
   financeSummarySchema,
@@ -119,15 +120,14 @@ describe('matching validation', () => {
 });
 
 describe('summary validation', () => {
-  // The window used to be filled in here, from the clock. It is now left
-  // alone, because the service fills missing bounds from the shared reporting
-  // default.
-  it('accepts a request that names no window, and invents none', () => {
+  // Each bound defaults on its own, from the shared reporting window, before
+  // anything is checked — the way the analytics reports resolve theirs.
+  it('fills a request that names no window from the shared default', () => {
     const parsed = financeSummarySchema.safeParse({ query: {} });
     expect(parsed.success).toBe(true);
     if (!parsed.success) return;
-    expect(parsed.data.query.from).toBeUndefined();
-    expect(parsed.data.query.to).toBeUndefined();
+    expect(parsed.data.query.from).toBe(DEFAULT_REPORT_WINDOW_FROM);
+    expect(parsed.data.query.to).toBe(defaultReportWindowTo());
   });
 
   it('still checks a window the caller did name', () => {
@@ -138,11 +138,21 @@ describe('summary validation', () => {
     ).toBe(true);
   });
 
-  // One bound alone cannot be wrong: the other is not a claim the caller made.
-  it('takes a single bound without complaint', () => {
+  it('takes a single bound that makes a sound window with the default', () => {
     expect(
       financeSummarySchema.safeParse({ query: { from: '2026-03-01T00:00:00Z' } }).success,
     ).toBe(true);
+  });
+
+  // One bound alone used to pass unexamined, and a window running
+  // backwards against the default was answered with an empty report.
+  it('checks a single bound against the default it is paired with', () => {
+    expect(
+      financeSummarySchema.safeParse({ query: { from: '9999-01-01T00:00:00Z' } }).success,
+    ).toBe(false);
+    expect(financeSummarySchema.safeParse({ query: { to: '2025-12-31T00:00:00Z' } }).success).toBe(
+      false,
+    );
   });
 
   it('refuses a window that runs backwards or scans years', () => {
@@ -158,5 +168,38 @@ describe('summary validation', () => {
       financeSummarySchema.safeParse({ query: { from: tooWide, to: new Date(to).toISOString() } })
         .success,
     ).toBe(false);
+  });
+
+  // The bounds are read by the same rule as the analytics reports.
+  it('reads a bound without a zone as UTC and refuses what is not a date', () => {
+    const parsed = financeSummarySchema.safeParse({
+      query: { from: '2026-03-01T10:30', to: '2026-04-01' },
+    });
+    expect(parsed.success && parsed.data.query).toEqual({
+      from: '2026-03-01T10:30:00.000Z',
+      to: '2026-04-01T00:00:00.000Z',
+    });
+    for (const junk of ['1', '2026-02-31', '2026-03-01 10:30', 'March 1, 2026']) {
+      expect(financeSummarySchema.safeParse({ query: { from: junk } }).success).toBe(false);
+    }
+  });
+});
+
+describe('booking window validation', () => {
+  // The ledger's bounds follow the same rule as every report bound.
+  it('reads a booking bound without a zone as UTC', () => {
+    const parsed = listTransactionsSchema.safeParse({
+      query: { bookedFrom: '2026-01-05', bookedTo: '2026-01-06T12:00:00+02:00' },
+    });
+    expect(parsed.success && parsed.data.query).toMatchObject({
+      bookedFrom: '2026-01-05T00:00:00.000Z',
+      bookedTo: '2026-01-06T10:00:00.000Z',
+    });
+  });
+
+  it('refuses a booking bound that is not a date', () => {
+    for (const junk of ['1', '2026-13-01', '2026-01-05T10:00:00+0200']) {
+      expect(listTransactionsSchema.safeParse({ query: { bookedTo: junk } }).success).toBe(false);
+    }
   });
 });

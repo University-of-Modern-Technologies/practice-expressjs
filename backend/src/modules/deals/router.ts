@@ -9,6 +9,8 @@ import {
   pageOf,
   refusals,
 } from '../../common/openapi/index.js';
+import { requirePermission } from '../rbac/middleware.js';
+import type { RbacService } from '../rbac/service.js';
 import type { DealsController } from './controller.js';
 import { dealSchema } from './types.js';
 import {
@@ -23,6 +25,7 @@ import {
 export const createDealsRouter = (
   controller: DealsController,
   authenticate: RequestHandler,
+  rbacService: RbacService,
 ): Router => {
   const router = Router();
   router.use(authenticate);
@@ -31,6 +34,16 @@ export const createDealsRouter = (
     { name: 'Deal transitions', description: 'Переходи угод між stage' },
   ]);
 
+  // The grant is checked before the request is validated, so a caller without
+  // access is refused the same way whatever they sent. Any breadth admits the
+  // caller here; what that breadth lets them touch is the service's business.
+  const allowed = (action: 'read' | 'write' | 'delete'): RequestHandler =>
+    requirePermission(rbacService, {
+      resource: 'deals',
+      action,
+      ownerId: (request) => request.auth?.userId,
+    });
+
   routes.get(
     '/',
     {
@@ -38,6 +51,7 @@ export const createDealsRouter = (
       response: ok('Сторінка угод', pageOf(dealSchema)),
       refusals: refusals(401, 403),
     },
+    allowed('read'),
     validate(listDealsSchema),
     controller.list,
   );
@@ -48,6 +62,7 @@ export const createDealsRouter = (
       response: ok('Угода', dealSchema),
       refusals: refusals(401, 403, 404),
     },
+    allowed('read'),
     validate(getDealSchema),
     controller.getById,
   );
@@ -58,6 +73,7 @@ export const createDealsRouter = (
       response: created('Угоду створено', dealSchema),
       refusals: refusals(401, 403, 404),
     },
+    allowed('write'),
     validate(createDealSchema),
     controller.create,
   );
@@ -68,6 +84,7 @@ export const createDealsRouter = (
       response: ok('Угоду оновлено', dealSchema),
       refusals: refusals(401, 403, 404, 409),
     },
+    allowed('write'),
     validate(updateDealSchema),
     controller.update,
   );
@@ -81,6 +98,7 @@ export const createDealsRouter = (
       response: ok('Stage угоди змінено', dealSchema),
       refusals: refusals(401, 403, 404, 409),
     },
+    allowed('write'),
     validate(transitionDealSchema),
     controller.transition,
   );
@@ -91,6 +109,7 @@ export const createDealsRouter = (
       response: noContent('Угоду видалено'),
       refusals: refusals(401, 403, 404, 409),
     },
+    allowed('delete'),
     validate(deleteDealSchema),
     controller.delete,
   );

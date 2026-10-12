@@ -1,3 +1,5 @@
+import { randomInt } from 'node:crypto';
+
 import { AppError } from '../../common/errors/index.js';
 import { filter } from '../../common/query/filter-builder.js';
 import { createListReader } from '../../common/query/list-reader.js';
@@ -71,9 +73,9 @@ const TICKET_NUMBER_ATTEMPTS = 5;
  * left to the unique index and a collision is simply redrawn.
  */
 const generateTicketNumber = (): string => {
-  const digits = Math.floor(Math.random() * 100_000_000)
-    .toString()
-    .padStart(8, '0');
+  // Drawn from the system's secure generator: the number ends up in support
+  // email, and a predictable sequence would let anyone guess the next one.
+  const digits = randomInt(100_000_000).toString().padStart(8, '0');
   return `TKT-${digits}`;
 };
 
@@ -143,20 +145,44 @@ const assertContactAccess = async (
 };
 
 /**
- * An assignee is a colleague, not a record the caller owns, so the narrowed
- * scope does not apply here — only an active account is required.
+ * Owners and assignees are colleagues, not records the caller owns, so the
+ * narrowed scope does not apply here — only an active account is required.
+ * Naming anybody else is the caller's mistake about a person, reported as
+ * such, rather than a foreign key failing somewhere below.
  */
-const assertAssigneeExists = async (
+const assertActiveUser = async (
   transaction: HelpdeskTransaction,
-  assigneeId: string | null | undefined,
+  userId: string | null | undefined,
+  message: string,
+  code: string,
 ): Promise<void> => {
-  if (!assigneeId) return;
-  const assignee = await transaction.user.findFirst({
-    where: { id: assigneeId, isActive: true },
+  if (!userId) return;
+  const user = await transaction.user.findFirst({
+    where: { id: userId, isActive: true },
     select: { id: true },
   });
-  if (!assignee) throw new AppError('Assignee not found', 404, 'TICKET_ASSIGNEE_NOT_FOUND');
+  if (!user) throw new AppError(message, 404, code);
 };
+
+const assertOwnerExists = (
+  transaction: HelpdeskTransaction,
+  ownerId: string | undefined,
+): Promise<void> =>
+  assertActiveUser(transaction, ownerId, 'Owner not found', 'TICKET_OWNER_NOT_FOUND');
+
+const assertAssigneeExists = (
+  transaction: HelpdeskTransaction,
+  assigneeId: string | null | undefined,
+): Promise<void> =>
+  assertActiveUser(transaction, assigneeId, 'Assignee not found', 'TICKET_ASSIGNEE_NOT_FOUND');
+
+/**
+ * A search term is matched literally. The filter becomes `LIKE`, where `%` and
+ * `_` are wildcards, so a caller searching for "100%" would otherwise match
+ * every row that merely contains "100".
+ */
+const literalSearch = (term: string | undefined): string | undefined =>
+  term?.replace(/[\\%_]/g, '\\$&');
 
 export const createHelpdeskService = (
   db: HelpdeskDatabase,
@@ -213,7 +239,7 @@ export const createHelpdeskService = (
         .equals('priority', query.priority)
         // The number is quoted back by the person reporting the problem far
         // more often than the subject is, so it is searchable alongside it.
-        .search(query.search, ['subject', 'number'])
+        .search(literalSearch(query.search), ['subject', 'number'])
         .range('openedAt', query.openedFrom, query.openedTo, toDate)
         .build();
       return readPage({
@@ -233,6 +259,7 @@ export const createHelpdeskService = (
       ensureOwnerAccess(access, ownerId);
       const created = await withTicketNumber((number) =>
         db.$transaction(async (transaction) => {
+          await assertOwnerExists(transaction, data.ownerId);
           await assertContactAccess(transaction, access, data.contactId);
           await assertAssigneeExists(transaction, data.assigneeId);
           const ticket = await transaction.ticket.create({
@@ -293,6 +320,7 @@ export const createHelpdeskService = (
         assertCurrentVersion(existing.version, data.version);
         const ownerId = data.ownerId ?? existing.ownerId;
         ensureOwnerAccess(access, ownerId);
+        await assertOwnerExists(transaction, data.ownerId);
         await assertContactAccess(transaction, access, data.contactId);
         await assertAssigneeExists(transaction, data.assigneeId);
         const updateData: Prisma.TicketUncheckedUpdateInput = {

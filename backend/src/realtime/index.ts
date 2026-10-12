@@ -1,4 +1,4 @@
-export { ACCESS_TOKEN_SUBPROTOCOL_PREFIX, BEARER_SUBPROTOCOL, extractAccessToken } from './auth.js';
+export { BEARER_SUBPROTOCOL, extractAccessToken } from './auth.js';
 export {
   createRealtimeGateway,
   type RealtimeGatewayConfig,

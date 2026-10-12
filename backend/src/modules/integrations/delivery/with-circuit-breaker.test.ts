@@ -86,3 +86,56 @@ describe('withCircuitBreaker', () => {
     expect(warn).toHaveBeenCalled();
   });
 });
+
+describe('late results', () => {
+  it('ignores a success that was admitted before the circuit opened', async () => {
+    let now = 0;
+    const breaker = createCircuitBreaker({
+      failureThreshold: 1,
+      cooldownMs: 1_000,
+      now: () => now,
+    });
+    let release: (response: DeliveryTransportResponse) => void = () => undefined;
+    const slow: DeliveryTransport = {
+      kind: 'http',
+      send: () =>
+        new Promise((resolve) => {
+          release = resolve;
+        }),
+    };
+    const failing = withCircuitBreaker(fakeTransport([serverError]), { breaker });
+    const pending = withCircuitBreaker(slow, { breaker }).send(request);
+
+    // Another call opens the circuit while the first is still in flight.
+    await failing.send(request);
+    expect(breaker.snapshot().state).toBe('open');
+
+    release(ok);
+    await pending;
+
+    expect(breaker.snapshot().state).toBe('open');
+    now = 500;
+    expect(breaker.tryAcquire()).toBe(false);
+  });
+
+  it('lets only the probe decide a half-open circuit', () => {
+    let now = 0;
+    const breaker = createCircuitBreaker({
+      failureThreshold: 1,
+      cooldownMs: 1_000,
+      now: () => now,
+    });
+    const early = breaker.acquire();
+    breaker.onFailure(breaker.acquire() ?? undefined);
+    now = 1_000;
+    const probe = breaker.acquire();
+    expect(probe?.probe).toBe(true);
+
+    // A call admitted before the circuit opened reports late; nothing moves.
+    breaker.onSuccess(early ?? undefined);
+    expect(breaker.snapshot().state).toBe('half-open');
+
+    breaker.onSuccess(probe ?? undefined);
+    expect(breaker.snapshot().state).toBe('closed');
+  });
+});

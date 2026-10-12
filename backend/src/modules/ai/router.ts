@@ -2,7 +2,9 @@ import { Router, type RequestHandler } from 'express';
 
 import { validate } from '../../common/middleware/validate.js';
 import { describeRoutes, ok, refusals } from '../../common/openapi/index.js';
-import type { AiController } from './controller.js';
+import { requirePermission } from '../rbac/middleware.js';
+import type { RbacService } from '../rbac/service.js';
+import { AI_RESOURCE, type AiController } from './controller.js';
 import { dealSummarySchema, inquiryClassificationSchema } from './types.js';
 import { classifyInquirySchema, summariseDealSchema } from './validation.js';
 
@@ -11,12 +13,24 @@ const providerErrorNote =
   'Текст, довший за ліміт (за замовчуванням 4000 символів), відхиляється з ' +
   '400 `AI_INPUT_TOO_LARGE`.';
 
-export const createAiRouter = (controller: AiController, authenticate: RequestHandler): Router => {
+export const createAiRouter = (
+  controller: AiController,
+  authenticate: RequestHandler,
+  rbacService: RbacService,
+): Router => {
   const router = Router();
   router.use(authenticate);
   const routes = describeRoutes(router, [
     { name: 'AI', description: 'Асистент: стислі описи та класифікація' },
   ]);
+
+  // The grant is checked before the request is validated, so a caller without
+  // access is refused the same way whatever they sent.
+  const canUse = requirePermission(rbacService, {
+    resource: AI_RESOURCE,
+    action: 'use',
+    ownerId: (request) => request.auth?.userId,
+  });
 
   routes.post(
     '/summaries/deal',
@@ -29,6 +43,7 @@ export const createAiRouter = (controller: AiController, authenticate: RequestHa
       // The assistant is a remote dependency, so it fails like one.
       refusals: refusals(401, 403, 502, 503, 504),
     },
+    canUse,
     validate(summariseDealSchema),
     controller.summariseDeal,
   );
@@ -42,6 +57,7 @@ export const createAiRouter = (controller: AiController, authenticate: RequestHa
       response: ok('Класифікація звернення', inquiryClassificationSchema),
       refusals: refusals(401, 403, 502, 503, 504),
     },
+    canUse,
     validate(classifyInquirySchema),
     controller.classifyInquiry,
   );

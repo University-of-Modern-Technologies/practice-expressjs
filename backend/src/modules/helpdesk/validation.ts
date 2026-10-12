@@ -1,16 +1,26 @@
 import { z } from 'zod';
-import { ticketChannels, ticketPriorities, ticketSortFields, ticketStatuses } from './types.js';
+import {
+  MAX_HELPDESK_PAGE,
+  ticketChannels,
+  ticketPriorities,
+  ticketSortFields,
+  ticketStatuses,
+} from './types.js';
 
 const idParams = z.object({ id: z.string().uuid() });
 const timestamp = z.string().datetime({ offset: true });
-const version = z.coerce.number().int().positive();
+// A query string carries text, so the version there is read from it; a JSON
+// body has a number type of its own, and `"3"`, `null` or `true` in its place is
+// a malformed request rather than a value to convert.
+const queryVersion = z.coerce.number().int().positive();
+const version = z.number().int().positive();
 const subject = z.string().trim().min(1).max(200);
 const body = z.string().trim().min(1).max(5000);
 
 export const listTicketsSchema = z.object({
   query: z
     .object({
-      page: z.coerce.number().int().min(1).default(1),
+      page: z.coerce.number().int().min(1).max(MAX_HELPDESK_PAGE).default(1),
       pageSize: z.coerce.number().int().min(1).max(100).default(20),
       search: z.string().trim().min(1).max(160).optional(),
       status: z.enum(ticketStatuses).optional(),
@@ -76,5 +86,5 @@ export const transitionTicketSchema = z.object({
 
 export const deleteTicketSchema = z.object({
   params: idParams,
-  query: z.object({ version }),
+  query: z.object({ version: queryVersion }),
 });

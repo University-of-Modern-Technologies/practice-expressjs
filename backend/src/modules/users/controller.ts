@@ -1,5 +1,6 @@
 import type { Request, RequestHandler } from 'express';
 import { AppError } from '../../common/errors/app-error.js';
+import { requestActor } from '../auth/client.js';
 import type { UsersService } from './service.js';
 import type { CreateUserData, UpdateUserData } from './types.js';
 
@@ -36,20 +37,29 @@ export const createUsersController = (usersService: UsersService): UsersControll
   },
   revokeSession: async (request, response) => {
     await usersService.revokeSession(
+      requestActor(request),
       requireParam(request, 'id'),
       requireParam(request, 'sessionId'),
     );
     response.status(204).send();
   },
   create: async (request, response) => {
-    response.status(201).json({ data: await usersService.create(request.body as CreateUserData) });
+    response.status(201).json({
+      data: await usersService.create(requestActor(request), request.body as CreateUserData),
+    });
   },
   update: async (request, response) => {
     response.status(200).json({
-      data: await usersService.update(requireParam(request, 'id'), request.body as UpdateUserData),
+      data: await usersService.update(
+        requestActor(request),
+        requireParam(request, 'id'),
+        request.body as UpdateUserData,
+      ),
     });
   },
   disable: async (request, response) => {
-    response.status(200).json({ data: await usersService.disable(requireParam(request, 'id')) });
+    response.status(200).json({
+      data: await usersService.disable(requestActor(request), requireParam(request, 'id')),
+    });
   },
 });

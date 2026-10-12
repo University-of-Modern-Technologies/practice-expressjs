@@ -68,4 +68,58 @@ describe('order total recomputation', () => {
       calculateOrderTotals({ lineTotals: ['10.00'], discountTotal: '10.01', taxTotal: '0' }),
     ).toThrow(expect.objectContaining({ statusCode: 400, code: 'ORDER_TOTALS_INVALID' }));
   });
+
+  it('measures the discount against the subtotal, so a tax cannot hide an oversized one', () => {
+    expect(() =>
+      calculateOrderTotals({ lineTotals: ['10.00'], discountTotal: '15.00', taxTotal: '10.00' }),
+    ).toThrow(expect.objectContaining({ statusCode: 400, code: 'ORDER_TOTALS_INVALID' }));
+  });
+
+  it('lowers an oversized discount to the subtotal when asked to cap it', () => {
+    expect(
+      calculateOrderTotals({
+        lineTotals: ['10.00'],
+        discountTotal: '15.00',
+        taxTotal: '2.00',
+        capDiscount: true,
+      }),
+    ).toEqual({ subtotal: '10.00', discountTotal: '10.00', taxTotal: '2.00', total: '2.00' });
+  });
+});
+
+describe('order amount range', () => {
+  const max = '999999999999.99';
+
+  it('refuses a line total the money column cannot hold', () => {
+    expect(() => calculateLineTotal(max, 2)).toThrow(
+      expect.objectContaining({
+        statusCode: 400,
+        code: 'ORDER_AMOUNT_OUT_OF_RANGE',
+        details: { field: 'lineTotal', max },
+      }),
+    );
+    expect(calculateLineTotal(max, 1)).toBe(max);
+  });
+
+  it('refuses a subtotal the money column cannot hold, even when every line fits', () => {
+    expect(() =>
+      calculateOrderTotals({ lineTotals: [max, '0.01'], discountTotal: '0', taxTotal: '0' }),
+    ).toThrow(
+      expect.objectContaining({
+        code: 'ORDER_AMOUNT_OUT_OF_RANGE',
+        details: { field: 'subtotal', max },
+      }),
+    );
+  });
+
+  it('refuses a total that the tax pushes past the money column', () => {
+    expect(() =>
+      calculateOrderTotals({ lineTotals: [max], discountTotal: '0', taxTotal: '0.01' }),
+    ).toThrow(
+      expect.objectContaining({
+        code: 'ORDER_AMOUNT_OUT_OF_RANGE',
+        details: { field: 'total', max },
+      }),
+    );
+  });
 });

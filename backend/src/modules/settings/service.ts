@@ -6,7 +6,7 @@ import { settingValueKey, settingsListKey } from './cache-keys.js';
 import {
   ensureSettingKey,
   parseSettingValue,
-  readStoredValue,
+  readStoredSetting,
   settingDefinition,
   settingKeys,
   type SettingKey,
@@ -24,6 +24,9 @@ interface SettingRow {
 }
 
 export type SettingsDatabase = Pick<PrismaDatabase, '$transaction' | 'organizationSetting'>;
+
+/** The setting whose value has to name a warehouse that can serve orders. */
+const DEFAULT_WAREHOUSE_KEY: SettingKey = 'warehouse.defaultCode';
 
 export interface SettingsService {
   list(): Promise<readonly SettingDto[]>;
@@ -57,13 +60,17 @@ const toDto = (key: SettingKey, row: SettingRow | null): SettingDto => {
       source: 'default',
     };
   }
+  const stored = readStoredSetting(key, row.value);
   return {
     key,
-    value: readStoredValue(key, row.value),
-    description: row.description ?? definition.description,
+    value: stored.value,
+    // An empty description is no description: the declared one is shown.
+    description: row.description || definition.description,
     updatedById: row.updatedById,
     updatedAt: row.updatedAt.toISOString(),
-    source: 'database',
+    // A stored value that no longer fits its schema is replaced by the default
+    // on the way out, so the default is what the source has to say.
+    source: stored.valid ? 'database' : 'default',
   };
 };
 
@@ -139,9 +146,27 @@ export const createSettingsService = (
     async upsert(access, rawKey, data) {
       const key = ensureSettingKey(rawKey);
       const value = parseSettingValue(key, data.value) as Prisma.InputJsonValue;
-      const description = data.description ?? settingDefinition(key).description;
+      // `null`, an absent field and a blank one all mean "use the declared one".
+      const description = data.description || settingDefinition(key).description;
 
       const dto = await db.$transaction(async (transaction) => {
+        if (key === DEFAULT_WAREHOUSE_KEY) {
+          // Orders draw on this warehouse, so the code has to name one that
+          // exists and still works; a typo would otherwise surface much later,
+          // as every order failing to reserve stock.
+          const warehouse = await transaction.warehouse.findFirst({
+            where: { code: value as string, isActive: true },
+            select: { id: true },
+          });
+          if (!warehouse) {
+            throw new AppError(
+              `No active warehouse has the code ${String(value)}`,
+              400,
+              'INVALID_SETTING_VALUE',
+              { key },
+            );
+          }
+        }
         const before = await transaction.organizationSetting.findUnique({
           where: { key },
           select: settingSelection,

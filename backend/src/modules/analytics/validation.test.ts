@@ -109,3 +109,37 @@ describe('analytics query validation', () => {
     ).toBe(true);
   });
 });
+
+describe('analytics date bounds', () => {
+  // A missing zone is UTC, not the zone of the server.
+  it('reads a date-time without a zone as UTC', () => {
+    const parsed = salesSummarySchema.parse({
+      query: { from: '2026-01-01T10:30', to: '2026-01-02T00:00:00.5' },
+    });
+    expect(parsed.query.from).toBe('2026-01-01T10:30:00.000Z');
+    expect(parsed.query.to).toBe('2026-01-02T00:00:00.500Z');
+  });
+
+  it('honours an explicit offset and truncates below the millisecond', () => {
+    const parsed = salesSummarySchema.parse({
+      query: { from: '2026-01-01T02:00:00.123987+02:00', to: '2026-01-02T00:00:00Z' },
+    });
+    expect(parsed.query.from).toBe('2026-01-01T00:00:00.123Z');
+  });
+
+  // Everything `Date.parse` would guess at is refused instead.
+  it('refuses anything that is not an ISO 8601 date or timestamp', () => {
+    for (const junk of [
+      '1',
+      '2026',
+      '2026-02-31',
+      '2026-01-01 10:00',
+      '2026-01-01T10:00:00+0200',
+      '2026-01-01T24:00',
+      ' 2026-01-01',
+      'Jan 1 2026',
+    ]) {
+      expect(salesSummarySchema.safeParse({ query: { from: junk } }).success).toBe(false);
+    }
+  });
+});

@@ -2,9 +2,14 @@ import { createNoopCacheService, type CacheService } from '../../cache/cache.ser
 import { userPermissionsKey, userPermissionsPrefix } from '../../cache/keys.js';
 import { AppError } from '../../common/errors/app-error.js';
 import type { PrismaDatabase, PrismaTransaction } from '../../db/prisma.js';
+import { createAuditService, type AuditService } from '../audit/service.js';
 import {
   createPermissionKey,
   parsePermissionKey,
+  ROLE_CREATED,
+  ROLE_ENTITY_TYPE,
+  ROLE_PERMISSIONS_REPLACED,
+  type Actor,
   type CreateRoleData,
   type PermissionRecord,
   type PermissionScope,
@@ -31,8 +36,13 @@ interface RoleRecord {
 export interface RbacDatabase {
   readonly user: Pick<PrismaDatabase['user'], 'findUnique'>;
   readonly role: Pick<PrismaDatabase['role'], 'findMany'>;
+  /** Read by the default audit service; role edits are written inside the transaction. */
+  readonly auditLog: PrismaDatabase['auditLog'];
   readonly $transaction: PrismaDatabase['$transaction'];
 }
+
+/** The slice of the audit service role administration writes through. */
+export type AuditRecorder = Pick<AuditService, 'record'>;
 
 export interface RbacService {
   getPermissionScope(
@@ -51,8 +61,12 @@ export interface UserPermissionsInvalidator {
 export interface RbacAdminService extends RbacService, UserPermissionsInvalidator {
   invalidateAllUserPermissions(): Promise<void>;
   listRoles(): Promise<RoleDto[]>;
-  createRole(data: CreateRoleData): Promise<RoleDto>;
-  replaceRolePermissions(id: string, data: ReplaceRolePermissionsData): Promise<RoleDto>;
+  createRole(actor: Actor, data: CreateRoleData): Promise<RoleDto>;
+  replaceRolePermissions(
+    actor: Actor,
+    id: string,
+    data: ReplaceRolePermissionsData,
+  ): Promise<RoleDto>;
 }
 
 // Default for services constructed without RBAC wiring, for example in tests.
@@ -173,6 +187,9 @@ export const createRbacService = (
   db: RbacDatabase,
   cache: CacheService = createNoopCacheService(),
   permissionsTtlSeconds: number = DEFAULT_PERMISSIONS_TTL_SECONDS,
+  // Every role edit is written to the trail inside its own transaction, so the
+  // edit and its entry commit, or roll back, as one.
+  audit: AuditRecorder = createAuditService(db),
 ): RbacAdminService => ({
   async getPermissionScope(userId, resource, action) {
     const permissions = await cache.remember(
@@ -202,9 +219,19 @@ export const createRbacService = (
     return roles.map(toRoleDto);
   },
 
-  async createRole(data) {
+  async createRole(actor, data) {
     try {
       return await db.$transaction(async (transaction) => {
+        // A taken name is reported before the permission list is looked at,
+        // the order the sibling backend checks in.
+        const taken = await transaction.role.findUnique({
+          where: { name: data.name },
+          select: { id: true },
+        });
+        if (taken) {
+          throw new AppError('A role with this name already exists', 409, 'ROLE_ALREADY_EXISTS');
+        }
+
         const idsByKey = await resolvePermissions(transaction, data.permissions);
         const creates = permissionCreates(data.permissions, idsByKey);
         const role = (await transaction.role.create({
@@ -215,21 +242,30 @@ export const createRbacService = (
           },
           select: roleSelection,
         })) as RoleRecord;
-        return toRoleDto(role);
+        const created = toRoleDto(role);
+        await audit.record(transaction, {
+          actorId: actor.actorId,
+          action: ROLE_CREATED,
+          entityType: ROLE_ENTITY_TYPE,
+          entityId: role.id,
+          changes: { after: created },
+          ipAddress: actor.ipAddress,
+        });
+        return created;
       });
     } catch (error) {
       return mapPersistenceError(error);
     }
   },
 
-  async replaceRolePermissions(id, data) {
+  async replaceRolePermissions(actor, id, data) {
     try {
       const updated = await db.$transaction(async (transaction) => {
-        const roleExists = await transaction.role.findUnique({
+        const existing = (await transaction.role.findUnique({
           where: { id },
-          select: { id: true },
-        });
-        if (!roleExists) throw new AppError('Role not found', 404, 'ROLE_NOT_FOUND');
+          select: roleSelection,
+        })) as RoleRecord | null;
+        if (!existing) throw new AppError('Role not found', 404, 'ROLE_NOT_FOUND');
 
         const idsByKey = await resolvePermissions(transaction, data.permissions);
         const creates = permissionCreates(data.permissions, idsByKey);
@@ -243,7 +279,16 @@ export const createRbacService = (
           },
           select: roleSelection,
         })) as RoleRecord;
-        return toRoleDto(role);
+        const replaced = toRoleDto(role);
+        await audit.record(transaction, {
+          actorId: actor.actorId,
+          action: ROLE_PERMISSIONS_REPLACED,
+          entityType: ROLE_ENTITY_TYPE,
+          entityId: id,
+          changes: { before: toRoleDto(existing), after: replaced },
+          ipAddress: actor.ipAddress,
+        });
+        return replaced;
       });
       // Every user holding this role now has a stale permission set.
       await cache.invalidatePrefix(userPermissionsPrefix());

@@ -74,6 +74,7 @@ interface HarnessOptions {
   readonly deal?: { id: string } | null;
   readonly provider?: CallProvider;
   readonly now?: (() => number) | undefined;
+  readonly syncBatchSize?: number | undefined;
 }
 
 const createHarness = (options: HarnessOptions = {}) => {
@@ -106,6 +107,7 @@ const createHarness = (options: HarnessOptions = {}) => {
     call: { findFirst, update: updateCall, create: createCall },
     contact: { findFirst: findContact },
     deal: { findFirst: findDeal },
+    user: { findFirst: jest.fn(async (_args: unknown) => null as { id: string } | null) },
     auditLog: { create: jest.fn() },
   };
   const readCall = jest.fn(
@@ -126,8 +128,10 @@ const createHarness = (options: HarnessOptions = {}) => {
   return {
     service: createCallsService(db, audit, provider, events, {
       ...(options.now ? { now: options.now } : {}),
+      ...(options.syncBatchSize ? { syncBatchSize: options.syncBatchSize } : {}),
     }),
     db,
+    transaction,
     provider,
     createCall,
     findFirst,
@@ -212,13 +216,15 @@ describe('calls service listing filters', () => {
     const attached = createHarness();
     await attached.service.list(wideAccess, { ...listQuery, hasContact: true });
     expect(attached.findMany).toHaveBeenCalledWith(
-      expect.objectContaining({ where: expect.objectContaining({ contactId: { not: null } }) }),
+      expect.objectContaining({
+        where: expect.objectContaining({ AND: [{ contactId: { not: null } }] }),
+      }),
     );
 
     const loose = createHarness();
     await loose.service.list(wideAccess, { ...listQuery, hasContact: false });
     expect(loose.findMany).toHaveBeenCalledWith(
-      expect.objectContaining({ where: expect.objectContaining({ contactId: null }) }),
+      expect.objectContaining({ where: expect.objectContaining({ AND: [{ contactId: null }] }) }),
     );
   });
 
@@ -463,5 +469,58 @@ describe('calls service domain event fan-out', () => {
     await expect(
       harness.service.link(access, ownedCall.id, { version: 1, contactId: 'contact-1' }),
     ).resolves.toMatchObject({ id: ownedCall.id, contactId: 'contact-1' });
+  });
+});
+
+describe('calls service regressions', () => {
+  it('keeps a contact filter when the absence filter is also given', async () => {
+    const harness = createHarness();
+
+    await harness.service.list(wideAccess, {
+      ...listQuery,
+      contactId: 'contact-1',
+      hasContact: false,
+    });
+
+    const [args] = harness.findMany.mock.calls[0] as unknown as [{ where: object }];
+    expect(args.where).toMatchObject({ contactId: 'contact-1', AND: [{ contactId: null }] });
+  });
+
+  it('refuses an owner who is unknown or inactive without writing', async () => {
+    const harness = createHarness();
+
+    await expect(
+      harness.service.update(wideAccess, ownedCall.id, { version: 1, ownerId: 'owner-2' }),
+    ).rejects.toMatchObject({ statusCode: 404, code: 'CALL_OWNER_NOT_FOUND' });
+    expect(harness.updateCall).not.toHaveBeenCalled();
+  });
+
+  it('reports an empty stored link as no recording', async () => {
+    const harness = createHarness({ existing: { ...ownedCall, recordingUrl: '' } });
+
+    await expect(harness.service.getRecording(access, ownedCall.id)).rejects.toMatchObject({
+      statusCode: 404,
+      code: 'CALL_RECORDING_UNAVAILABLE',
+    });
+  });
+
+  it('never asks the provider for more than one batch may hold', async () => {
+    const fetchCalls = jest.fn<CallProvider['fetchCalls']>(async () => []);
+    const harness = createHarness({ provider: { name: 'test', fetchCalls }, syncBatchSize: 1_000 });
+
+    await harness.service.sync(wideAccess);
+
+    expect(fetchCalls).toHaveBeenCalledWith({ limit: 500 });
+  });
+
+  it('searches for LIKE wildcards literally', async () => {
+    const harness = createHarness();
+
+    await harness.service.list(wideAccess, { ...listQuery, search: '_1' });
+
+    const [args] = harness.findMany.mock.calls[0] as unknown as [
+      { where: { OR: { fromNumber: { contains: string } }[] } },
+    ];
+    expect(args.where.OR[0]?.fromNumber.contains).toBe('\\_1');
   });
 });

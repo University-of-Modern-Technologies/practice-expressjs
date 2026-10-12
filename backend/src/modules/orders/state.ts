@@ -11,7 +11,7 @@ export interface OrderState {
   readonly allowedTransitions: readonly OrderStatus[];
   /** Lines and monetary fields may only be reshaped in this state. */
   readonly isEditable: boolean;
-  /** Leaving this state requires at least one line. */
+  /** Moving forward out of this state requires at least one line; cancelling does not. */
   readonly requiresItems: boolean;
   /** Stock consequence of moving to `to`, or null when stock is untouched. */
   stockEffect(to: OrderStatus): OrderStockEffect | null;
@@ -19,7 +19,8 @@ export interface OrderState {
 
 /**
  * A draft is the only status that is still being assembled: it may be
- * reshaped freely, but it must not leave empty-handed. Confirming it is the
+ * reshaped freely, but it must not be confirmed empty-handed (it may still be
+ * cancelled, which promises nothing). Confirming it is the
  * moment the goods are promised, so that is the one move that reserves stock.
  */
 const draft: OrderState = {

@@ -72,15 +72,14 @@ export const inquiryClassificationSystemPrompt = (): string =>
   ].join(' ');
 
 /**
- * Builds the deal prompt from an explicit field list. Fields are labelled and
- * the free-text note — the only part a user controls — is the only part that
- * goes inside the untrusted block.
+ * Builds the deal prompt from an explicit field list. Every field a person
+ * typed — the title, the stage label and the note — goes inside an untrusted
+ * block; outside stay only the values the schema already pinned to a number,
+ * a currency code or a date, which cannot carry an instruction.
  */
 export const dealSummaryPrompt = (deal: DealSummaryInput): string => {
-  const lines = [
-    `Title: ${sanitizeUntrustedText(deal.title)}`,
-    `Stage: ${sanitizeUntrustedText(deal.stage)}`,
-  ];
+  const record = wrapUntrusted(`Title: ${deal.title}\nStage: ${deal.stage}`);
+  const lines = [`Deal record:\n${record}`];
   if (deal.amount !== undefined) {
     lines.push(`Amount: ${deal.amount} ${deal.currency ?? ''}`.trim());
   }

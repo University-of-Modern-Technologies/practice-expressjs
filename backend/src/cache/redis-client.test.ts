@@ -101,6 +101,25 @@ describe('redis client', () => {
     expect(retryStrategy(1_000)).toBe(5_000);
   });
 
+  it('caps every command at a short timeout, queue time included', async () => {
+    const { createRedisClient } = await import('./redis-client.js');
+    createRedisClient(config, createLogger());
+
+    expect(lastInstance().options).toMatchObject({ commandTimeout: 2_000 });
+  });
+
+  it('stops queueing commands once the first connection is ready', async () => {
+    // During an outage a queued command waits for the reconnect backoff, which
+    // is what used to hold a request for tens of seconds; after boot a command
+    // must fail at once so the caller falls back to the database.
+    const { createRedisClient } = await import('./redis-client.js');
+    createRedisClient(config, createLogger());
+
+    expect(lastInstance().options.enableOfflineQueue).toBe(true);
+    lastInstance().emit('ready');
+    expect(lastInstance().options.enableOfflineQueue).toBe(false);
+  });
+
   it('logs connection errors instead of letting them escape', async () => {
     const logger = createLogger();
     const { createRedisClient } = await import('./redis-client.js');

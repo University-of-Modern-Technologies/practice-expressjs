@@ -27,10 +27,22 @@ const activeProduct = {
 interface HarnessOptions {
   readonly create?: (args: unknown) => Promise<unknown>;
   readonly update?: (args: unknown) => Promise<unknown>;
+  /** What a lookup by SKU finds once an insert has been refused. */
+  readonly skuHolder?: { readonly deletedAt: Date | null } | null;
 }
 
 const createHarness = (options: HarnessOptions = {}) => {
   const findFirst = jest.fn(async (_args: unknown) => activeProduct);
+  const findBySku = jest.fn(async (_args: unknown) =>
+    options.skuHolder === undefined ? activeProduct : options.skuHolder,
+  );
+  // Reads by id and the lookup by SKU share one delegate; they are told apart
+  // by what they filter on.
+  const findOnDb = jest.fn(async (args: unknown) =>
+    (args as { where?: { sku?: string } }).where?.sku === undefined
+      ? findFirst(args)
+      : findBySku(args),
+  );
   const createProduct = jest.fn(options.create ?? (async (_args: unknown) => activeProduct));
   const updateProduct = jest.fn(
     options.update ?? (async (_args: unknown) => ({ ...activeProduct, version: 2 })),
@@ -42,7 +54,7 @@ const createHarness = (options: HarnessOptions = {}) => {
   const findMany = jest.fn(async (_args: unknown) => [activeProduct]);
   const count = jest.fn(async (_args: unknown) => 1);
   const db = {
-    product: { findFirst, findMany, count },
+    product: { findFirst: findOnDb, findMany, count },
     $transaction: jest.fn(async (callback: (value: typeof transaction) => Promise<unknown>) =>
       callback(transaction),
     ),
@@ -56,6 +68,7 @@ const createHarness = (options: HarnessOptions = {}) => {
     service: createProductsService(db, audit, events),
     db,
     findFirst,
+    findBySku,
     findMany,
     createProduct,
     updateProduct,
@@ -79,7 +92,11 @@ describe('products service catalogue rules', () => {
       code: 'PRODUCT_SKU_TAKEN',
     } satisfies Partial<AppError>);
     // No read precedes the insert: a check-then-insert would lose the race.
+    // The only lookup comes after the refusal, to name its reason.
     expect(harness.findFirst).not.toHaveBeenCalled();
+    expect(harness.createProduct.mock.invocationCallOrder[0]).toBeLessThan(
+      harness.findBySku.mock.invocationCallOrder[0] ?? 0,
+    );
     expect(harness.record).not.toHaveBeenCalled();
     expect(harness.publish).not.toHaveBeenCalled();
   });
@@ -247,5 +264,64 @@ describe('products service domain event fan-out', () => {
     await expect(harness.service.create(access, validProduct)).resolves.toMatchObject({
       id: activeProduct.id,
     });
+  });
+});
+
+describe('products service retired SKUs', () => {
+  it('names a SKU held by a deleted product instead of calling it taken', async () => {
+    const harness = createHarness({
+      create: async () => {
+        throw { code: 'P2002', meta: { target: ['sku'] } };
+      },
+      skuHolder: { deletedAt: timestamp },
+    });
+
+    await expect(harness.service.create(access, validProduct)).rejects.toMatchObject({
+      statusCode: 409,
+      code: 'PRODUCT_SKU_RETIRED',
+    } satisfies Partial<AppError>);
+    expect(harness.findBySku).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { sku: 'SKU-1' } }),
+    );
+    expect(harness.publish).not.toHaveBeenCalled();
+  });
+
+  it('keeps calling a SKU held by a live product taken', async () => {
+    const harness = createHarness({
+      create: async () => {
+        throw { code: 'P2002', meta: { target: ['sku'] } };
+      },
+      skuHolder: { deletedAt: null },
+    });
+
+    await expect(harness.service.create(access, validProduct)).rejects.toMatchObject({
+      statusCode: 409,
+      code: 'PRODUCT_SKU_TAKEN',
+    });
+  });
+});
+
+describe('products service search', () => {
+  it('matches the search term literally, escaping LIKE wildcards', async () => {
+    const harness = createHarness();
+
+    await harness.service.list(access, {
+      page: 1,
+      pageSize: 20,
+      search: '100%_cotton',
+      sortBy: 'createdAt',
+      sortOrder: 'desc',
+    });
+
+    expect(harness.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          OR: [
+            { name: { contains: '100\\%\\_cotton', mode: 'insensitive' } },
+            { sku: { contains: '100\\%\\_cotton', mode: 'insensitive' } },
+          ],
+        }) as unknown,
+      }),
+    );
   });
 });

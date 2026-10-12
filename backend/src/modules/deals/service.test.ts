@@ -40,10 +40,12 @@ const createHarness = (update: (args: unknown) => Promise<unknown>) => {
   const transaction = {
     deal: { findFirst, update: updateDeal },
     contact: { findFirst: jest.fn() },
+    user: { findFirst: jest.fn(async (_args: unknown) => null as { id: string } | null) },
     auditLog: { create: jest.fn() },
   };
+  const findMany = jest.fn(async (_args: unknown) => []);
   const db = {
-    deal: { findFirst: jest.fn() },
+    deal: { findFirst: jest.fn(), findMany, count: jest.fn(async () => 0) },
     $transaction: jest.fn(async (callback: (value: typeof transaction) => Promise<unknown>) =>
       callback(transaction),
     ),
@@ -56,6 +58,8 @@ const createHarness = (update: (args: unknown) => Promise<unknown>) => {
   return {
     service: createDealsService(db, audit, events),
     db,
+    transaction,
+    findMany,
     findFirst,
     updateDeal,
     record,
@@ -198,5 +202,49 @@ describe('deals service domain event fan-out', () => {
     await expect(
       harness.service.transition(access, activeDeal.id, { version: 1, stage: 'QUALIFIED' }),
     ).resolves.toMatchObject({ id: activeDeal.id, stage: 'QUALIFIED' });
+  });
+});
+
+describe('deal owners and search', () => {
+  const everything: DealAccess = { actorId: 'actor-1', scope: 'ALL' };
+
+  it('refuses an owner who is unknown or inactive on create', async () => {
+    const harness = createHarness(async () => updatedDeal);
+    const create = jest.fn();
+    (harness.transaction.deal as { create?: unknown }).create = create;
+
+    await expect(
+      harness.service.create(everything, { title: 'X', amount: '1.00', ownerId: 'owner-2' }),
+    ).rejects.toMatchObject({ statusCode: 404, code: 'DEAL_OWNER_NOT_FOUND' });
+    expect(harness.transaction.user.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'owner-2', isActive: true } }),
+    );
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('refuses an unknown owner on update without writing', async () => {
+    const harness = createHarness(async () => updatedDeal);
+
+    await expect(
+      harness.service.update(everything, activeDeal.id, { version: 1, ownerId: 'owner-2' }),
+    ).rejects.toMatchObject({ statusCode: 404, code: 'DEAL_OWNER_NOT_FOUND' });
+    expect(harness.updateDeal).not.toHaveBeenCalled();
+  });
+
+  it('searches titles for LIKE wildcards literally', async () => {
+    const harness = createHarness(async () => updatedDeal);
+
+    await harness.service.list(everything, {
+      page: 1,
+      pageSize: 20,
+      search: '50%_off',
+      sortBy: 'createdAt',
+      sortOrder: 'desc',
+    });
+
+    const [args] = harness.findMany.mock.calls[0] as unknown as [
+      { where: { OR: { title: { contains: string } }[] } },
+    ];
+    expect(args.where.OR[0]?.title.contains).toBe('50\\%\\_off');
   });
 });

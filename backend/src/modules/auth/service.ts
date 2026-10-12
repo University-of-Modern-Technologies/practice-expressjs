@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import type { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcryptjs';
-import jwt from 'jsonwebtoken';
+import jwt, { type JwtPayload } from 'jsonwebtoken';
 import { AppError } from '../../common/errors/app-error.js';
 import type {
   AuthConfig,
@@ -11,6 +11,7 @@ import type {
   PermissionGrant,
 } from './types.js';
 import { parsePermissionKey } from '../rbac/types.js';
+import type { SessionClient } from './client.js';
 import type { LoginInput } from './validation.js';
 
 interface UserRecord {
@@ -30,12 +31,25 @@ interface UserRecord {
 export type AuthDatabase = Pick<PrismaClient, 'user' | 'session'>;
 
 export interface AuthService {
-  login(input: LoginInput): Promise<AuthResult>;
-  refresh(refreshToken: string): Promise<AuthResult>;
+  login(input: LoginInput, client?: SessionClient): Promise<AuthResult>;
+  refresh(refreshToken: string, client?: SessionClient): Promise<AuthResult>;
   logout(refreshToken?: string): Promise<void>;
   authenticate(accessToken: string): Promise<{ userId: string; sessionId: string }>;
   me(userId: string): Promise<AuthenticatedUser>;
 }
+
+/** Work factor for every digest this service writes. */
+const BCRYPT_ROUNDS = 12;
+
+/**
+ * Digest of a throwaway password at the same work factor. A login for an
+ * address nobody holds is checked against it, so that case costs the same time
+ * as a wrong password and the response time does not reveal who has an account.
+ */
+export const DUMMY_PASSWORD_HASH = '$2b$12$gZVMDJyGYCaF.8HNnTCql.wJGnSgdF5t1tOnnHEZohOMJ3TR.KlTC';
+
+/** Identifiers exactly as they are issued; nothing else reaches a query. */
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const userSelection = {
   id: true,
@@ -79,13 +93,50 @@ const toUserDto = (user: UserRecord): AuthenticatedUser => {
   };
 };
 
-const splitRefreshToken = (token: string): { sessionId: string; secret: string } => {
+const invalidRefreshToken = (): AppError =>
+  new AppError('Invalid refresh token', 401, 'INVALID_REFRESH_TOKEN');
+
+const unauthorized = (): AppError => new AppError('Unauthorized', 401, 'UNAUTHORIZED');
+
+/**
+ * Splits `"{sessionId}.{secret}"`. The session half must be an identifier in
+ * the form it was issued in, so a forged cookie is a 401 and never reaches the
+ * database as a value the column cannot hold.
+ */
+export const splitRefreshToken = (token: string): { sessionId: string; secret: string } => {
   const separator = token.indexOf('.');
-  if (separator < 1 || separator === token.length - 1) {
-    throw new AppError('Invalid refresh token', 401, 'INVALID_REFRESH_TOKEN');
-  }
-  return { sessionId: token.slice(0, separator), secret: token.slice(separator + 1) };
+  if (separator < 1 || separator === token.length - 1) throw invalidRefreshToken();
+  const sessionId = token.slice(0, separator);
+  if (!UUID_PATTERN.test(sessionId)) throw invalidRefreshToken();
+  return { sessionId: sessionId.toLowerCase(), secret: token.slice(separator + 1) };
 };
+
+/** The claims an access token must carry, or `null` when it carries anything else. */
+const verifyAccessClaims = (
+  accessToken: string,
+  secret: string,
+): { userId: string; sessionId: string } | null => {
+  let payload: string | JwtPayload;
+  try {
+    payload = jwt.verify(accessToken, secret);
+  } catch {
+    return null;
+  }
+  if (
+    typeof payload === 'string' ||
+    payload.type !== 'access' ||
+    typeof payload.sub !== 'string' ||
+    typeof payload.sessionId !== 'string' ||
+    !UUID_PATTERN.test(payload.sub) ||
+    !UUID_PATTERN.test(payload.sessionId)
+  ) {
+    return null;
+  }
+  return { userId: payload.sub, sessionId: payload.sessionId };
+};
+
+const clientColumns = (client: SessionClient | undefined) =>
+  client ? { ipAddress: client.ipAddress, userAgent: client.userAgent } : {};
 
 export const createAuthService = (db: AuthDatabase, config: AuthConfig): AuthService => {
   const issueAccessToken = (userId: string, sessionId: string): string =>
@@ -94,21 +145,42 @@ export const createAuthService = (db: AuthDatabase, config: AuthConfig): AuthSer
       expiresIn: config.accessTokenTtlSeconds,
     });
 
-  const issueSessionTokens = async (userId: string, sessionId?: string): Promise<AuthTokens> => {
+  const tokensFor = (userId: string, sessionId: string, secret: string): AuthTokens => ({
+    accessToken: issueAccessToken(userId, sessionId),
+    refreshToken: `${sessionId}.${secret}`,
+    accessTokenExpiresInSeconds: config.accessTokenTtlSeconds,
+  });
+
+  const freshSecret = async () => {
     const secret = randomBytes(48).toString('base64url');
-    const tokenHash = await bcrypt.hash(secret, 12);
+    const tokenHash = await bcrypt.hash(secret, BCRYPT_ROUNDS);
     const expiresAt = new Date(Date.now() + config.refreshTokenTtlSeconds * 1000);
-    const session = sessionId
-      ? await db.session.update({
-          where: { id: sessionId },
-          data: { tokenHash, expiresAt, revokedAt: null },
-        })
-      : await db.session.create({ data: { userId, tokenHash, expiresAt } });
-    return {
-      accessToken: issueAccessToken(userId, session.id),
-      refreshToken: `${session.id}.${secret}`,
-      accessTokenExpiresInSeconds: config.accessTokenTtlSeconds,
-    };
+    return { secret, tokenHash, expiresAt };
+  };
+
+  const openSession = async (userId: string, client?: SessionClient): Promise<AuthTokens> => {
+    const { secret, tokenHash, expiresAt } = await freshSecret();
+    const session = await db.session.create({
+      data: { userId, tokenHash, expiresAt, ...clientColumns(client) },
+    });
+    return tokensFor(userId, session.id, secret);
+  };
+
+  const rotateSession = async (
+    userId: string,
+    sessionId: string,
+    client?: SessionClient,
+  ): Promise<AuthTokens> => {
+    const { secret, tokenHash, expiresAt } = await freshSecret();
+    // The write is conditional on the row still being live. A revocation that
+    // commits while this refresh is in flight therefore wins: the row stays
+    // revoked, and the caller gets the answer any other unusable token gets.
+    const { count } = await db.session.updateMany({
+      where: { id: sessionId, revokedAt: null },
+      data: { tokenHash, expiresAt, ...clientColumns(client) },
+    });
+    if (count !== 1) throw invalidRefreshToken();
+    return tokensFor(userId, sessionId, secret);
   };
 
   const getActiveUser = async (userId: string): Promise<UserRecord> => {
@@ -118,18 +190,25 @@ export const createAuthService = (db: AuthDatabase, config: AuthConfig): AuthSer
   };
 
   return {
-    async login(input) {
+    async login(input, client) {
       const user = await db.user.findUnique({
         where: { email: input.email },
         select: userSelection,
       });
-      if (!user || !user.isActive || !(await bcrypt.compare(input.password, user.passwordHash))) {
+      // The password is checked in every case, against a throwaway digest when
+      // there is no account, so a missing account, a disabled one and a wrong
+      // password all take the same time to refuse.
+      const passwordMatches = await bcrypt.compare(
+        input.password,
+        user?.passwordHash ?? DUMMY_PASSWORD_HASH,
+      );
+      if (!user || !user.isActive || !passwordMatches) {
         throw new AppError('Invalid email or password', 401, 'INVALID_CREDENTIALS');
       }
-      return { user: toUserDto(user), ...(await issueSessionTokens(user.id)) };
+      return { user: toUserDto(user), ...(await openSession(user.id, client)) };
     },
 
-    async refresh(refreshToken) {
+    async refresh(refreshToken, client) {
       const { sessionId, secret } = splitRefreshToken(refreshToken);
       const session = await db.session.findUnique({
         where: { id: sessionId },
@@ -139,15 +218,15 @@ export const createAuthService = (db: AuthDatabase, config: AuthConfig): AuthSer
         !session ||
         session.revokedAt ||
         session.expiresAt.getTime() <= Date.now() ||
+        !(await bcrypt.compare(secret, session.tokenHash)) ||
         !session.user ||
-        !session.user.isActive ||
-        !(await bcrypt.compare(secret, session.tokenHash))
+        !session.user.isActive
       ) {
-        throw new AppError('Invalid refresh token', 401, 'INVALID_REFRESH_TOKEN');
+        throw invalidRefreshToken();
       }
       return {
         user: toUserDto(session.user),
-        ...(await issueSessionTokens(session.userId, session.id)),
+        ...(await rotateSession(session.userId, session.id, client)),
       };
     },
 
@@ -165,30 +244,27 @@ export const createAuthService = (db: AuthDatabase, config: AuthConfig): AuthSer
     },
 
     async authenticate(accessToken) {
-      try {
-        const payload = jwt.verify(accessToken, config.accessTokenSecret);
-        if (
-          typeof payload === 'string' ||
-          payload.type !== 'access' ||
-          typeof payload.sub !== 'string' ||
-          typeof payload.sessionId !== 'string'
-        ) {
-          throw new Error('Invalid access token payload');
-        }
-        const session = await db.session.findUnique({ where: { id: payload.sessionId } });
-        if (
-          !session ||
-          session.userId !== payload.sub ||
-          session.revokedAt ||
-          session.expiresAt <= new Date()
-        ) {
-          throw new Error('Inactive session');
-        }
-        await getActiveUser(payload.sub);
-        return { userId: payload.sub, sessionId: payload.sessionId };
-      } catch {
-        throw new AppError('Unauthorized', 401, 'UNAUTHORIZED');
+      // Only a token that fails verification is the caller's problem. A store
+      // that cannot be read is an outage, and it propagates as one instead of
+      // being reported as "you are not signed in".
+      const claims = verifyAccessClaims(accessToken, config.accessTokenSecret);
+      if (!claims) throw unauthorized();
+
+      const session = await db.session.findUnique({ where: { id: claims.sessionId } });
+      if (
+        !session ||
+        session.userId !== claims.userId ||
+        session.revokedAt ||
+        session.expiresAt <= new Date()
+      ) {
+        throw unauthorized();
       }
+      const user = await db.user.findUnique({
+        where: { id: claims.userId },
+        select: { isActive: true },
+      });
+      if (!user || !user.isActive) throw unauthorized();
+      return claims;
     },
 
     async me(userId) {

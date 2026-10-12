@@ -1,7 +1,8 @@
 import { describe, expect, it, jest } from '@jest/globals';
-import express, { type RequestHandler } from 'express';
+import express, { type ErrorRequestHandler, type RequestHandler } from 'express';
 import request from 'supertest';
 
+import type { RbacService } from '../rbac/service.js';
 import type { CallsController } from './controller.js';
 import { createCallsRouter } from './router.js';
 
@@ -19,10 +20,20 @@ const controller = {
   delete: noContent,
 } as CallsController;
 
-const authenticate: RequestHandler = (_request, _response, next) => next();
+const authenticate: RequestHandler = (req, _response, next) => {
+  req.auth = { userId: 'user-1' } as NonNullable<typeof req.auth>;
+  next();
+};
+
+/** Holds every grant: what these tests check is routing, not permissions. */
+const rbac = {
+  getPermissionScope: jest.fn(async () => 'ALL' as const),
+} as unknown as RbacService;
 
 const createApp = () =>
-  express().use(express.json()).use('/calls', createCallsRouter(controller, authenticate));
+  express()
+    .use(express.json())
+    .use('/calls', createCallsRouter(controller, authenticate, rbac));
 
 const id = '5ff875e1-4c1d-4e45-9c8a-fceb5fb5d836';
 
@@ -60,5 +71,29 @@ describe('calls router', () => {
     await request(app).post(`/calls/${id}/links`).send(body).expect(404);
 
     expect(controller.link).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('calls router permissions', () => {
+  const refuse: ErrorRequestHandler = (
+    error: { statusCode?: number; code?: string },
+    _req,
+    res,
+    _next,
+  ) => {
+    res.status(error.statusCode ?? 500).json({ code: error.code });
+  };
+
+  it('refuses a caller without the grant before validating what they sent', async () => {
+    const denied = { getPermissionScope: jest.fn(async () => null) } as unknown as RbacService;
+    const app = express()
+      .use(express.json())
+      .use('/calls', createCallsRouter(controller, authenticate, denied))
+      .use(refuse);
+
+    const response = await request(app).patch('/calls/not-a-uuid').send({ version: 'x' });
+
+    expect(response.status).toBe(403);
+    expect(response.body).toEqual({ code: 'FORBIDDEN' });
   });
 });

@@ -1,15 +1,21 @@
 import { describe, expect, it, jest } from '@jest/globals';
-import express, { type RequestHandler } from 'express';
+import express, { type ErrorRequestHandler, type RequestHandler } from 'express';
 import request from 'supertest';
 
-import type { OrdersController } from './controller.js';
+import { AppError } from '../../common/errors/index.js';
+import type { RbacService } from '../rbac/service.js';
+import { createOrdersController, type OrdersController } from './controller.js';
 import { createOrdersRouter } from './router.js';
+import type { OrdersService } from './service.js';
 
 const noContent: RequestHandler = (_request, response) => {
   response.status(204).end();
 };
 
+const pass: RequestHandler = (_request, _response, next) => next();
+
 const controller = {
+  authorize: { read: pass, write: pass, delete: pass },
   list: noContent,
   getById: noContent,
   create: noContent,
@@ -74,5 +80,57 @@ describe('orders router', () => {
     expect(controller.addItem).toHaveBeenCalledTimes(1);
     expect(controller.updateItem).toHaveBeenCalledTimes(1);
     expect(controller.removeItem).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('orders router permission order', () => {
+  const renderError: ErrorRequestHandler = (error: unknown, _request, response, _next) => {
+    const appError = error instanceof AppError ? error : new AppError('boom', 500, 'INTERNAL');
+    response.status(appError.statusCode).json({ error: { code: appError.code } });
+  };
+
+  const buildApp = (scope: 'ALL' | null) => {
+    const rbac = {
+      getPermissionScope: jest.fn(async () => scope),
+    } as unknown as RbacService;
+    const service = {
+      create: jest.fn(async () => ({ id })),
+    } as unknown as OrdersService;
+    const signedIn: RequestHandler = (req, _response, next) => {
+      req.auth = { userId: 'user-1', sessionId: 'session-1' };
+      next();
+    };
+    const app = express()
+      .use(express.json())
+      .use('/orders', createOrdersRouter(createOrdersController(service, rbac), signedIn))
+      .use(renderError);
+    return { app, rbac, service };
+  };
+
+  it('refuses a caller without the grant before it looks at the body', async () => {
+    const { app } = buildApp(null);
+
+    const response = await request(app).post('/orders').send({ items: 'not-a-list' }).expect(403);
+
+    expect(response.body).toEqual({ error: { code: 'FORBIDDEN' } });
+  });
+
+  it('refuses a caller without the grant before it looks at the path', async () => {
+    const { app } = buildApp(null);
+
+    await request(app).get('/orders/not-a-uuid').expect(403);
+  });
+
+  it('still validates the body once the grant is confirmed, asking for the grant only once', async () => {
+    const { app, rbac, service } = buildApp('ALL');
+
+    const response = await request(app).post('/orders').send({ items: 'not-a-list' }).expect(400);
+
+    expect(response.body).toEqual({ error: { code: 'VALIDATION_ERROR' } });
+    expect(service.create).not.toHaveBeenCalled();
+
+    await request(app).post('/orders').send({}).expect(201);
+    // One lookup per request: the handler reuses what the guard resolved.
+    expect(rbac.getPermissionScope).toHaveBeenCalledTimes(2);
   });
 });

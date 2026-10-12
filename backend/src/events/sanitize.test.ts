@@ -1,5 +1,6 @@
 import { describe, expect, it } from '@jest/globals';
 
+import { isSensitiveAuditField, sanitizeAuditValue } from '../modules/audit/sanitize.js';
 import { isSensitiveEventField, sanitizeEventPayload } from './sanitize.js';
 
 describe('event payload sanitization', () => {
@@ -58,5 +59,36 @@ describe('event payload sanitization', () => {
       missing: null,
       self: '[CIRCULAR]',
     });
+  });
+});
+
+/**
+ * The one redacted vocabulary. The audit trail, the event log and the realtime
+ * channel all redact this exact set, in this base and in its sibling.
+ */
+const REDACTED_KEYS = [
+  'accessToken',
+  'apiKey',
+  'authorization',
+  'cookie',
+  'credential',
+  'password',
+  'passwordHash',
+  'refreshToken',
+  'secret',
+  'sessionToken',
+  'token',
+  'tokenHash',
+] as const;
+
+describe('shared redaction vocabulary', () => {
+  it.each(REDACTED_KEYS)('event and audit sanitisers both redact %s', (key) => {
+    expect(isSensitiveEventField(key)).toBe(true);
+    expect(isSensitiveAuditField(key)).toBe(true);
+  });
+
+  it('redacts a credential field in both payload kinds', () => {
+    expect(sanitizeEventPayload({ credential: 'x' })).toEqual({ credential: '[REDACTED]' });
+    expect(sanitizeAuditValue({ credential: 'x' })).toEqual({ credential: '[REDACTED]' });
   });
 });

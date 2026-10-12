@@ -16,7 +16,7 @@ interface ContactRecord extends ContactDto {
   readonly deletedAt: Date | null;
 }
 
-type ContactsTransaction = Pick<PrismaTransaction, 'auditLog' | 'contact'>;
+type ContactsTransaction = Pick<PrismaTransaction, '$queryRaw' | 'auditLog' | 'contact' | 'user'>;
 export type ContactsDatabase = Pick<PrismaDatabase, '$transaction' | 'contact'>;
 
 export interface ContactsService {
@@ -43,6 +43,14 @@ const contactSelection = {
 
 const toDto = ({ deletedAt: _deletedAt, ...contact }: ContactRecord): ContactDto => contact;
 
+/**
+ * A search term is matched literally. The filter becomes `LIKE`, where `%` and
+ * `_` are wildcards, so a caller searching for "100%" would otherwise match
+ * every row that merely contains "100".
+ */
+const literalSearch = (term: string | undefined): string | undefined =>
+  term?.replace(/[\\%_]/g, '\\$&');
+
 const ensureOwnerAccess = (access: ContactAccess, ownerId: string): void => {
   if (access.scope === 'OWN' && ownerId !== access.actorId) {
     throw new AppError('Forbidden', 403, 'FORBIDDEN');
@@ -61,6 +69,33 @@ const duplicateWhere = (
     ...(phone ? [{ phone }] : []),
   ],
 });
+
+/**
+ * An owner is a colleague who can still sign in. Naming anybody else is the
+ * caller's mistake about a person, reported as such, rather than a foreign key
+ * failing somewhere below.
+ */
+const assertOwnerExists = async (
+  transaction: ContactsTransaction,
+  ownerId: string | undefined,
+): Promise<void> => {
+  if (ownerId === undefined) return;
+  const owner = await transaction.user.findFirst({
+    where: { id: ownerId, isActive: true },
+    select: { id: true },
+  });
+  if (!owner) throw new AppError('Owner not found', 404, 'CONTACT_OWNER_NOT_FOUND');
+};
+
+/**
+ * Takes the row lock before the record is read for an edit. Whether a contact
+ * keeps a channel is decided from what it will look like after the patch, so
+ * two edits that each clear a different channel must not both read the
+ * untouched record: the second one waits here and then sees the first.
+ */
+const lockContact = async (transaction: ContactsTransaction, id: string): Promise<void> => {
+  await transaction.$queryRaw`SELECT id FROM contacts WHERE id = ${id}::uuid FOR UPDATE`;
+};
 
 const assertNoDuplicate = async (
   transaction: ContactsTransaction,
@@ -116,7 +151,7 @@ export const createContactsService = (
       const ownerId = access.scope === 'OWN' ? access.actorId : query.ownerId;
       const where = filter<Prisma.ContactWhereInput>({ deletedAt: null })
         .equals('ownerId', ownerId)
-        .search(query.search, [
+        .search(literalSearch(query.search), [
           'firstName',
           'lastName',
           'email',
@@ -141,6 +176,7 @@ export const createContactsService = (
       ensureOwnerAccess(access, ownerId);
       try {
         return await db.$transaction(async (transaction) => {
+          await assertOwnerExists(transaction, data.ownerId);
           await assertNoDuplicate(transaction, data.email, data.phone);
           const contact = await transaction.contact.create({
             data: {
@@ -173,9 +209,11 @@ export const createContactsService = (
     async update(access, id, data) {
       try {
         return await db.$transaction(async (transaction) => {
+          await lockContact(transaction, id);
           const existing = await findActive(transaction.contact, access, id);
           const ownerId = data.ownerId ?? existing.ownerId;
           ensureOwnerAccess(access, ownerId);
+          await assertOwnerExists(transaction, data.ownerId);
           const email = data.email === undefined ? existing.email : data.email;
           const phone = data.phone === undefined ? existing.phone : data.phone;
           if (!email && !phone) {

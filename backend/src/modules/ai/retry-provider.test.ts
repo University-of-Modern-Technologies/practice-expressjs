@@ -2,7 +2,12 @@ import { describe, expect, it, jest } from '@jest/globals';
 
 import { AppError } from '../../common/errors/app-error.js';
 import { aiTimeoutError, aiUnavailableError, type AiProvider } from './provider.js';
-import { RetryableAiFailure, withRetry } from './retry-provider.js';
+import {
+  MAX_RETRY_BACKOFF_MS,
+  MAX_RETRY_TOTAL_MS,
+  RetryableAiFailure,
+  withRetry,
+} from './retry-provider.js';
 
 const codeOf = async (promise: Promise<unknown>): Promise<string> => {
   try {
@@ -58,5 +63,46 @@ describe('withRetry (AI provider)', () => {
   it('preserves the wrapped provider name', () => {
     const inner: AiProvider = { name: 'inner-name', complete: () => Promise.resolve('x') };
     expect(withRetry(inner).name).toBe('inner-name');
+  });
+});
+
+describe('AI retry budget', () => {
+  const failing = (): AiProvider => ({
+    name: 'inner',
+    complete: jest.fn(() => Promise.reject(new RetryableAiFailure(aiUnavailableError()))),
+  });
+
+  it('caps a single pause however large the base', async () => {
+    const delay = jest.fn(async (_ms: number) => undefined);
+    const provider = withRetry(failing(), {
+      maxAttempts: 4,
+      backoffMs: 4_000,
+      delay,
+      now: () => 0,
+    });
+
+    await expect(provider.complete(request)).rejects.toBeInstanceOf(AppError);
+    expect(delay.mock.calls.map(([ms]) => ms)).toEqual([
+      4_000,
+      MAX_RETRY_BACKOFF_MS,
+      MAX_RETRY_BACKOFF_MS,
+    ]);
+  });
+
+  it('stops retrying once the total budget is spent', async () => {
+    let clock = 0;
+    const inner = failing();
+    const provider = withRetry(inner, {
+      maxAttempts: 10,
+      backoffMs: 5_000,
+      delay: async (ms) => {
+        clock += ms;
+      },
+      now: () => clock,
+    });
+
+    await expect(provider.complete(request)).rejects.toBeInstanceOf(AppError);
+    expect(clock).toBeLessThanOrEqual(MAX_RETRY_TOTAL_MS);
+    expect((inner.complete as jest.Mock).mock.calls.length).toBeLessThan(10);
   });
 });

@@ -495,3 +495,49 @@ describe('helpdesk service domain event fan-out', () => {
     ).resolves.toMatchObject({ id: activeTicket.id, status: 'RESOLVED' });
   });
 });
+
+describe('helpdesk owners, numbers and search', () => {
+  it('refuses an owner who is unknown or inactive before creating anything', async () => {
+    const harness = createHarness({ assignee: null });
+
+    await expect(
+      harness.service.create(wideAccess, { ...validTicket, ownerId: 'owner-2' }),
+    ).rejects.toMatchObject({ statusCode: 404, code: 'TICKET_OWNER_NOT_FOUND' });
+    expect(harness.findUser).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'owner-2', isActive: true } }),
+    );
+    expect(harness.createTicket).not.toHaveBeenCalled();
+  });
+
+  it('refuses an unknown owner on update without writing', async () => {
+    const harness = createHarness({ assignee: null });
+
+    await expect(
+      harness.service.update(wideAccess, activeTicket.id, { version: 1, ownerId: 'owner-2' }),
+    ).rejects.toMatchObject({ statusCode: 404, code: 'TICKET_OWNER_NOT_FOUND' });
+    expect(harness.updateTicket).not.toHaveBeenCalled();
+  });
+
+  it('draws the ticket number without Math.random', async () => {
+    const random = jest.spyOn(Math, 'random');
+    const harness = createHarness();
+
+    await harness.service.create(access, validTicket);
+
+    const [args] = harness.createTicket.mock.calls[0] as unknown as [{ data: { number: string } }];
+    expect(args.data.number).toMatch(/^TKT-\d{8}$/);
+    expect(random).not.toHaveBeenCalled();
+    random.mockRestore();
+  });
+
+  it('searches for LIKE wildcards literally', async () => {
+    const harness = createHarness();
+
+    await harness.service.list(wideAccess, { ...listQuery, search: '100%' });
+
+    const [args] = harness.findMany.mock.calls[0] as unknown as [
+      { where: { OR: { subject: { contains: string } }[] } },
+    ];
+    expect(args.where.OR[0]?.subject.contains).toBe('100\\%');
+  });
+});

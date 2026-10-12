@@ -132,6 +132,15 @@ const createSingleAttemptCallProvider = ({
         );
         throw callProviderUnavailableError();
       }
+      // The limit is part of what we asked for; a longer answer is the same
+      // contract violation as a malformed one, and is not imported in part.
+      if (parsed.data.length > request.limit) {
+        logger?.error(
+          { limit: request.limit, received: parsed.data.length },
+          'Telephony provider returned more records than requested',
+        );
+        throw callProviderUnavailableError();
+      }
       return parsed.data;
     },
   };

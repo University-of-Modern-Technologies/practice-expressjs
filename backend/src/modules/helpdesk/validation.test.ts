@@ -128,3 +128,23 @@ describe('ticket list validation', () => {
     expect(listTicketsSchema.safeParse({ query: { sortBy: 'subject' } }).success).toBe(false);
   });
 });
+
+describe('helpdesk numbers and bounds', () => {
+  it.each([null, '', '3', true, false])('refuses %p as a body version', (value) => {
+    expect(
+      updateTicketSchema.safeParse({ params: { id }, body: { version: value, priority: 'HIGH' } })
+        .success,
+    ).toBe(false);
+    expect(
+      transitionTicketSchema.safeParse({
+        params: { id },
+        body: { version: value, toStatus: 'OPEN' },
+      }).success,
+    ).toBe(false);
+  });
+
+  it('puts an upper bound on the page number and refuses a blank search', () => {
+    expect(listTicketsSchema.safeParse({ query: { page: '1000001' } }).success).toBe(false);
+    expect(listTicketsSchema.safeParse({ query: { search: '  ' } }).success).toBe(false);
+  });
+});

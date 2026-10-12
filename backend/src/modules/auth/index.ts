@@ -1,3 +1,4 @@
+export * from './client.js';
 export * from './controller.js';
 export * from './middleware.js';
 export * from './router.js';

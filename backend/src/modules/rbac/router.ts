@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { validate } from '../../common/middleware/validate.js';
 import { created, describeRoutes, ok, refusals } from '../../common/openapi/index.js';
 import type { RbacController } from './controller.js';
-import { requirePermission } from './middleware.js';
+import { permissionGate, requirePermission } from './middleware.js';
 import type { RbacAdminService } from './service.js';
 import { permissionScopes, roleSchema } from './types.js';
 import {
@@ -50,6 +50,9 @@ export const createRbacRouter = (
     requirePermission(rbacService, { resource: 'users', action: 'read' }),
     controller.listRoles,
   );
+  // Permission first, then validation, then breadth: the order the sibling
+  // backend refuses in (see `permissionGate`).
+  const canCreate = permissionGate(rbacService, { resource: 'users', action: 'create' });
   routes.post(
     '/roles',
     {
@@ -58,10 +61,12 @@ export const createRbacRouter = (
       response: created('Роль створено', roleSchema),
       refusals: refusals(401, 403, 409),
     },
-    requirePermission(rbacService, { resource: 'users', action: 'create' }),
+    canCreate.held,
     validate(createRoleSchema),
+    canCreate.breadth,
     controller.createRole,
   );
+  const canUpdate = permissionGate(rbacService, { resource: 'users', action: 'update' });
   routes.put(
     '/roles/:id/permissions',
     {
@@ -70,8 +75,9 @@ export const createRbacRouter = (
       response: ok('Дозволи ролі замінено', roleSchema),
       refusals: refusals(401, 403, 404),
     },
-    requirePermission(rbacService, { resource: 'users', action: 'update' }),
+    canUpdate.held,
     validate(replaceRolePermissionsSchema),
+    canUpdate.breadth,
     controller.replaceRolePermissions,
   );
   return router;

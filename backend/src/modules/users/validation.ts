@@ -1,8 +1,9 @@
 import { z } from 'zod';
 
+import { passwordSchema } from '../auth/validation.js';
+
 const userIdParams = z.object({ id: z.string().uuid() });
 const roleIdsSchema = z.array(z.string().uuid()).min(1).max(20);
-const passwordSchema = z.string().min(8).max(128).meta({ format: 'password' });
 
 export const listUsersSchema = z.object({
   query: z.object({

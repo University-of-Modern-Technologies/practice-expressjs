@@ -115,7 +115,9 @@ export const createAiService = (
         })
       ).trim();
 
-      await cache.set(key, summary, cacheTtlSeconds);
+      // An empty answer is a failed answer: caching it would serve the failure
+      // to every later caller for the whole lifetime of the entry.
+      if (summary.length > 0) await cache.set(key, summary, cacheTtlSeconds);
       return { dealId: input.id, summary, provider: provider.name, cached: false };
     },
 
@@ -149,7 +151,10 @@ export const createAiService = (
           }
         : { category: UNKNOWN_INQUIRY_CATEGORY as ResolvedInquiryCategory, confidence: 0 };
 
-      await cache.set(key, result, cacheTtlSeconds);
+      // Only a verdict the model actually gave is remembered. The fallback
+      // stands for "no usable answer this time", and caching it would turn one
+      // bad response into the answer for every later caller.
+      if (parsed.success) await cache.set(key, result, cacheTtlSeconds);
       return { ...result, provider: provider.name, cached: false };
     },
   };

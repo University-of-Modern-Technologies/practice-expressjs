@@ -198,7 +198,8 @@ npm run openapi:generate
 API бере значення в такому порядку: змінні процесу, потім `backend/.env`, потім
 кореневий `.env` (`backend/src/config/load-env.cjs`). Усі змінні бекенда
 перевіряє zod-схема `backend/src/config/env.ts`; неправильне значення зупиняє
-старт з переліком полів (`Invalid environment configuration`).
+старт з переліком полів (`Invalid environment configuration`). Порожнє значення
+(`KEY=`) означає те саме, що відсутнє: діє типове.
 
 ### Кореневий `.env`
 
@@ -234,16 +235,19 @@ API бере значення в такому порядку: змінні пр�
 | `PORT` | порт API; має пріоритет над `API_PORT` | `API_PORT`, інакше `8000` |
 | `LOG_LEVEL` | рівень журналу: `fatal`, `error`, `warn`, `info`, `debug`, `trace`, `silent` | `info` |
 | `CORS_ORIGINS` | дозволені origin через кому; `*` — будь-який | `http://localhost:3000` |
-| `JSON_BODY_LIMIT` | найбільший розмір тіла запиту | `1mb` |
+| `JSON_BODY_LIMIT` | найбільший розмір тіла запиту з одиницею (`1mb`, `512kb`) або в байтах, від 1024 до 67108864; більше тіло дістає 413 | `1mb` |
+| `JSON_BODY_LIMIT_BYTES` | те саме в байтах; перемагає `JSON_BODY_LIMIT` | не задано |
+| `TRUSTED_PROXIES` | адреси чи CIDR-мережі проксі через кому, яким API вірить щодо адреси клієнта (`X-Forwarded-For`); `*` не приймається. У Docker `compose.yaml` ставить `172.16.0.0/12` — мережу, з якої приходить nginx | не задано — адреса клієнта є адресою з'єднання |
+| `LOG_SQL` | `true` — журнал кожного SQL-запиту з параметрами; у production не діє | `false` |
 | `JWT_ACCESS_SECRET` | секрет підпису access-токена, щонайменше 32 символи | немає, обов'язкова |
 | `JWT_REFRESH_SECRET` | щонайменше 32 символи; перевіряється на старті | немає, обов'язкова |
 | `REDIS_KEY_PREFIX` | префікс усіх ключів Redis | `crm:` |
 | `CACHE_TTL_SECONDS` | скільки живе кешований звіт, налаштування чи набір дозволів | `300` |
 | `RATE_LIMIT_WINDOW_SECONDS` | вікно обмеження частоти запитів | `60` |
-| `RATE_LIMIT_MAX_REQUESTS` | запитів за вікно для всього API | `300` |
-| `AUTH_RATE_LIMIT_MAX_REQUESTS` | запитів за вікно для `/api/v1/auth` | `10` |
+| `RATE_LIMIT_MAX_REQUESTS` | запитів за вікно для одного користувача (за access-токеном) чи адреси | `300` |
+| `AUTH_RATE_LIMIT_MAX_REQUESTS` | додатковий, менший бюджет на `/api/v1/auth`, крім `/me` і `/logout` | `10` |
 | `EVENT_LOG_RETENTION_DAYS` | скільки днів MongoDB зберігає доменні події | `90` |
-| `WS_PATH` | шлях каналу подій реального часу | `/api/v1/realtime` |
+| `WS_PATH` | шлях каналу подій реального часу. Фіксований: nginx і веб-клієнт з'єднуються саме з `/api/v1/realtime`, тож інше значення зламає канал | `/api/v1/realtime` |
 | `API_DOCS_ENABLED` | вмикає `/api/docs` і `/api/openapi.json` | увімкнено скрізь, крім `APP_ENV=production` |
 | `METRICS_TOKEN` | bearer-токен для `/api/metrics`, щонайменше 16 символів | не задано — `/api/metrics` немає |
 | `SHUTDOWN_DRAIN_DELAY_MS` | пауза після сигналу зупинки, перш ніж закрити слухач | `0` |

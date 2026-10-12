@@ -25,6 +25,21 @@ const phoneNumber = z
   .regex(/^\+[1-9]\d{1,14}$/, 'Invalid E.164 number');
 
 /**
+ * A recording is something a browser is about to open, so only a web address
+ * is accepted from the provider: any other scheme (`javascript:`, `file:`,
+ * `data:`) in that field is a contract violation, not a link to hand out.
+ */
+const RECORDING_URL_PATTERN = /^https?:\/\/[^\s/?#]+\S*$/i;
+
+/**
+ * Upper bound on one batch. A provider that answers with more than this is
+ * misbehaving, and importing an unbounded batch inside one request is how a
+ * sync turns into an outage of its own making. The configured sync size is
+ * never allowed above it.
+ */
+export const MAX_PROVIDER_BATCH_SIZE = 500;
+
+/**
  * What we require of a record on the wire. A provider that answers with
  * anything else is treated as unavailable rather than half-trusted: importing
  * a call with a broken number would put the defect in the database, where it
@@ -38,12 +53,25 @@ export const callProviderRecordSchema = z.object({
   toNumber: phoneNumber,
   startedAt: z.string().datetime({ offset: true }),
   durationSeconds: z.number().int().min(0),
-  recordingUrl: z.string().trim().max(512).optional(),
+  recordingUrl: z
+    .string()
+    .trim()
+    .max(512)
+    // An empty link is the provider saying "no recording" in its own words.
+    .transform((value) => (value === '' ? undefined : value))
+    .refine((value) => value === undefined || RECORDING_URL_PATTERN.test(value), {
+      message: 'Expected an http(s) URL',
+    })
+    .nullable()
+    .transform((value) => value ?? undefined)
+    .optional(),
 });
 
 export type CallProviderRecord = z.infer<typeof callProviderRecordSchema>;
 
-export const callProviderBatchSchema = z.array(callProviderRecordSchema);
+export const callProviderBatchSchema = z
+  .array(callProviderRecordSchema)
+  .max(MAX_PROVIDER_BATCH_SIZE);
 
 export interface CallProvider {
   /** Identifies the implementation in responses and logs. */
