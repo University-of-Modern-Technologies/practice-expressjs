@@ -1,3 +1,6 @@
+import { z } from 'zod';
+
+import { versionNumberSchema } from '../../common/openapi/index.js';
 import type { PermissionScope } from '../rbac/types.js';
 
 export const ticketChannels = ['EMAIL', 'PHONE', 'CHAT', 'WEB'] as const;
@@ -9,23 +12,27 @@ export type TicketStatus = (typeof ticketStatuses)[number];
 export const ticketPriorities = ['LOW', 'NORMAL', 'HIGH', 'URGENT'] as const;
 export type TicketPriority = (typeof ticketPriorities)[number];
 
-export interface TicketDto {
-  readonly id: string;
-  readonly number: string;
-  readonly subject: string;
-  readonly body: string;
-  readonly channel: TicketChannel;
-  readonly status: TicketStatus;
-  readonly priority: TicketPriority;
-  readonly ownerId: string;
-  readonly contactId: string | null;
-  readonly assigneeId: string | null;
-  readonly version: number;
-  readonly openedAt: Date;
-  readonly resolvedAt: Date | null;
-  readonly createdAt: Date;
-  readonly updatedAt: Date;
-}
+export const ticketSchema = z
+  .object({
+    id: z.uuid(),
+    number: z.string().regex(/^TKT-\d{8}$/),
+    subject: z.string().min(1).max(200),
+    body: z.string().min(1).max(5000),
+    channel: z.enum(ticketChannels),
+    status: z.enum(ticketStatuses),
+    priority: z.enum(ticketPriorities),
+    ownerId: z.uuid(),
+    contactId: z.uuid().nullable(),
+    assigneeId: z.uuid().nullable(),
+    version: versionNumberSchema,
+    openedAt: z.date(),
+    resolvedAt: z.date().nullable(),
+    createdAt: z.date(),
+    updatedAt: z.date(),
+  })
+  .meta({ id: 'Ticket' });
+
+export type TicketDto = Readonly<z.infer<typeof ticketSchema>>;
 
 export interface TicketAccess {
   readonly actorId: string;

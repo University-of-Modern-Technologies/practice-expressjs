@@ -1,11 +1,14 @@
 import { Router, type Request } from 'express';
 import type { Logger } from 'pino';
+import { z } from 'zod';
 
-import { serviceLifecycle, type ServiceLifecycle } from './lifecycle.js';
+import { describeRoutes, okWith, type ApiTag } from '../../common/openapi/index.js';
+import { lifecyclePhases, serviceLifecycle, type ServiceLifecycle } from './lifecycle.js';
 import {
   DEFAULT_CHECK_TIMEOUT_MS,
   isDegradedReport,
   isReadyReport,
+  readinessStatuses,
   runReadinessChecks,
   type ReadinessCheck,
   type ReadinessCheckResult,
@@ -13,6 +16,10 @@ import {
 import { readServiceInfo, type ServiceInfo } from './service-info.js';
 
 export type { ReadinessCheck, ReadinessCheckResult, ReadinessStatus } from './readiness.js';
+
+export const HEALTH_PATH = '/api/health';
+
+const healthTag: ApiTag = { name: 'Health', description: 'Перевірки стану сервісу' };
 
 export interface HealthRouterOptions {
   /** Default per-check timeout in milliseconds. */
@@ -26,12 +33,28 @@ export interface HealthRouterOptions {
 }
 
 /** Public per-check payload: never carries error details. */
-interface PublicCheckResult {
-  readonly name: string;
-  readonly status: 'up' | 'down' | 'timed_out';
-  readonly durationMs: number;
-  readonly critical: boolean;
-}
+const readinessCheckReportSchema = z
+  .object({
+    name: z.string(),
+    status: z.enum(readinessStatuses),
+    durationMs: z.number(),
+    critical: z.boolean(),
+  })
+  .meta({ id: 'ReadinessCheckReport' });
+
+/** The body of `/ready`, the same shape whether it answers 200 or 503. */
+const readinessReportSchema = z
+  .object({
+    status: z.enum(['ready', 'degraded', 'not_ready', 'draining']),
+    phase: z.enum(lifecyclePhases),
+    checks: z.array(readinessCheckReportSchema),
+  })
+  .meta({ id: 'ReadinessReport' });
+
+type PublicCheckResult = z.infer<typeof readinessCheckReportSchema>;
+type ReadinessReport = z.infer<typeof readinessReportSchema>;
+
+const readinessReportContent = { 'application/json': { schema: readinessReportSchema } };
 
 const toPublicResult = ({
   name,
@@ -92,12 +115,27 @@ export const createHealthRouter = (
   const lifecycle = options.lifecycle ?? serviceLifecycle;
   const checkTimeoutMs = options.checkTimeoutMs ?? DEFAULT_CHECK_TIMEOUT_MS;
   const fallbackLogger = options.logger;
+  const routes = describeRoutes(router, [healthTag]);
 
-  router.get('/live', (_request, response) => {
-    // Liveness must stay successful while draining: the process is healthy, it
-    // is simply no longer accepting new traffic (that is what readiness says).
-    response.status(200).json({ status: 'ok' });
-  });
+  // Only the probes a client or a balancer polls are described; `/startup` and
+  // `/info` serve the orchestrator and stay out of the API description.
+  routes.get(
+    '/live',
+    {
+      summary: 'Перевірити працездатність процесу',
+      access: 'public',
+      response: okWith({
+        description: 'Процес працює',
+        content: { 'application/json': { schema: z.object({ status: z.enum(['ok']) }) } },
+      }),
+      refusals: {},
+    },
+    (_request, response) => {
+      // Liveness must stay successful while draining: the process is healthy, it
+      // is simply no longer accepting new traffic (that is what readiness says).
+      response.status(200).json({ status: 'ok' });
+    },
+  );
 
   router.get('/startup', (_request, response) => {
     const hasStarted = lifecycle.hasStarted;
@@ -108,28 +146,42 @@ export const createHealthRouter = (
     });
   });
 
-  router.get('/ready', async (request, response) => {
-    if (!lifecycle.isAcceptingTraffic) {
-      response.status(503).json({
-        status: lifecycle.phase === 'starting' ? 'not_ready' : 'draining',
+  routes.get(
+    '/ready',
+    {
+      summary: 'Перевірити готовність приймати трафік',
+      access: 'public',
+      response: okWith({ description: 'Сервіс готовий', content: readinessReportContent }),
+      refusals: {
+        '503': {
+          description: 'One or more dependencies are unavailable',
+          content: readinessReportContent,
+        },
+      },
+    },
+    async (request, response) => {
+      if (!lifecycle.isAcceptingTraffic) {
+        response.status(503).json({
+          status: lifecycle.phase === 'starting' ? 'not_ready' : 'draining',
+          phase: lifecycle.phase,
+          checks: [],
+        } satisfies ReadinessReport);
+        return;
+      }
+
+      const results = await runReadinessChecks(readinessChecks, checkTimeoutMs);
+      logFailures(request, fallbackLogger, results);
+
+      const isReady = isReadyReport(results);
+      const status = isReady ? (isDegradedReport(results) ? 'degraded' : 'ready') : 'not_ready';
+
+      response.status(isReady ? 200 : 503).json({
+        status,
         phase: lifecycle.phase,
-        checks: [],
-      });
-      return;
-    }
-
-    const results = await runReadinessChecks(readinessChecks, checkTimeoutMs);
-    logFailures(request, fallbackLogger, results);
-
-    const isReady = isReadyReport(results);
-    const status = isReady ? (isDegradedReport(results) ? 'degraded' : 'ready') : 'not_ready';
-
-    response.status(isReady ? 200 : 503).json({
-      status,
-      phase: lifecycle.phase,
-      checks: results.map(toPublicResult),
-    });
-  });
+        checks: results.map(toPublicResult),
+      } satisfies ReadinessReport);
+    },
+  );
 
   router.get('/info', (_request, response) => {
     const info = options.serviceInfo ?? readServiceInfo();

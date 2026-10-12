@@ -1,5 +1,5 @@
 import type { Request, RequestHandler } from 'express';
-import { AppError } from '../../common/errors/index.js';
+import { AppError, validationError } from '../../common/errors/index.js';
 import type { AuthContext } from '../../common/types/auth-context.js';
 import type { RbacService } from '../rbac/service.js';
 import type { PermissionScope } from '../rbac/types.js';
@@ -44,16 +44,13 @@ const accessFor = (request: Request, actorId: string, scope: PermissionScope): T
   ...(request.ip ? { ipAddress: request.ip } : {}),
 });
 
-const invalid = (details: unknown): AppError =>
-  new AppError('Invalid request', 400, 'VALIDATION_ERROR', details);
-
 export const createHelpdeskController = (
   service: HelpdeskService,
   rbac: RbacService,
 ): HelpdeskController => ({
   list: async (request, response) => {
     const parsed = listTicketsSchema.safeParse({ query: request.query });
-    if (!parsed.success) throw invalid(parsed.error.flatten());
+    if (!parsed.success) throw validationError(parsed.error.flatten());
     const auth = getAuth(request);
     const scope = await getScope(rbac, auth.userId, 'read');
     response.json({
@@ -63,7 +60,7 @@ export const createHelpdeskController = (
 
   getById: async (request, response) => {
     const parsed = getTicketSchema.safeParse({ params: request.params });
-    if (!parsed.success) throw invalid(parsed.error.flatten());
+    if (!parsed.success) throw validationError(parsed.error.flatten());
     const auth = getAuth(request);
     const scope = await getScope(rbac, auth.userId, 'read');
     response.json({
@@ -73,7 +70,7 @@ export const createHelpdeskController = (
 
   create: async (request, response) => {
     const parsed = createTicketSchema.safeParse({ body: request.body });
-    if (!parsed.success) throw invalid(parsed.error.flatten());
+    if (!parsed.success) throw validationError(parsed.error.flatten());
     const auth = getAuth(request);
     const scope = await getScope(rbac, auth.userId, 'write');
     response.status(201).json({
@@ -83,7 +80,7 @@ export const createHelpdeskController = (
 
   update: async (request, response) => {
     const parsed = updateTicketSchema.safeParse({ params: request.params, body: request.body });
-    if (!parsed.success) throw invalid(parsed.error.flatten());
+    if (!parsed.success) throw validationError(parsed.error.flatten());
     const auth = getAuth(request);
     const scope = await getScope(rbac, auth.userId, 'write');
     response.json({
@@ -100,7 +97,7 @@ export const createHelpdeskController = (
       params: request.params,
       body: request.body,
     });
-    if (!parsed.success) throw invalid(parsed.error.flatten());
+    if (!parsed.success) throw validationError(parsed.error.flatten());
     const auth = getAuth(request);
     const scope = await getScope(rbac, auth.userId, 'write');
     response.json({
@@ -114,7 +111,7 @@ export const createHelpdeskController = (
 
   delete: async (request, response) => {
     const parsed = deleteTicketSchema.safeParse({ params: request.params, query: request.query });
-    if (!parsed.success) throw invalid(parsed.error.flatten());
+    if (!parsed.success) throw validationError(parsed.error.flatten());
     const auth = getAuth(request);
     const scope = await getScope(rbac, auth.userId, 'delete');
     await service.delete(

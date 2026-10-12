@@ -33,6 +33,8 @@ const envSchema = z.object({
     .min(1)
     .regex(/^\//, 'WS_PATH must start with a slash')
     .default('/api/v1/realtime'),
+  // Absent means on everywhere except production, where the API is not advertised.
+  API_DOCS_ENABLED: z.stringbool().optional(),
   // Absent means the scrape endpoint is not exposed at all.
   METRICS_TOKEN: z.string().min(16).optional(),
   SHUTDOWN_GRACE_PERIOD_MS: z.coerce.number().int().min(0).max(300_000).default(10_000),
@@ -98,6 +100,8 @@ export type AppConfig = Readonly<{
   mongodbUrl: string;
   eventLogRetentionDays: number;
   wsPath: string;
+  /** Serves `/api/docs` and `/api/openapi.json`. */
+  apiDocsEnabled: boolean;
   metricsToken?: string | undefined;
   shutdownGracePeriodMs: number;
   shutdownTimeoutMs: number;
@@ -157,6 +161,7 @@ export const loadConfig = (source: NodeJS.ProcessEnv = process.env): AppConfig =
     mongodbUrl: parsed.data.MONGODB_URL,
     eventLogRetentionDays: parsed.data.EVENT_LOG_RETENTION_DAYS,
     wsPath: parsed.data.WS_PATH,
+    apiDocsEnabled: parsed.data.API_DOCS_ENABLED ?? parsed.data.APP_ENV !== 'production',
     metricsToken: parsed.data.METRICS_TOKEN,
     shutdownGracePeriodMs: parsed.data.SHUTDOWN_GRACE_PERIOD_MS,
     shutdownTimeoutMs: parsed.data.SHUTDOWN_TIMEOUT_MS,

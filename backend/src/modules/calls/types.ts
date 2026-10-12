@@ -1,3 +1,6 @@
+import { z } from 'zod';
+
+import { versionNumberSchema } from '../../common/openapi/index.js';
 import type { PermissionScope } from '../rbac/types.js';
 
 export const callDirections = ['INBOUND', 'OUTBOUND'] as const;
@@ -6,25 +9,34 @@ export type CallDirection = (typeof callDirections)[number];
 export const callDispositions = ['ANSWERED', 'NO_ANSWER', 'BUSY', 'FAILED', 'VOICEMAIL'] as const;
 export type CallDisposition = (typeof callDispositions)[number];
 
-export interface CallDto {
-  readonly id: string;
-  readonly externalId: string;
-  readonly direction: CallDirection;
-  readonly disposition: CallDisposition;
-  readonly fromNumber: string;
-  readonly toNumber: string;
-  readonly startedAt: Date;
-  readonly durationSeconds: number;
-  readonly contactId: string | null;
-  readonly dealId: string | null;
-  /** Nobody's call until somebody claims it; see the scope note in the service. */
-  readonly ownerId: string | null;
-  readonly recordingUrl: string | null;
-  readonly notes: string | null;
-  readonly version: number;
-  readonly createdAt: Date;
-  readonly updatedAt: Date;
-}
+/** E.164, the form the switchboard reports numbers in. */
+const PHONE_PATTERN = /^\+[1-9]\d{1,14}$/;
+
+const phoneNumber = z.string().max(32).regex(PHONE_PATTERN);
+
+export const callSchema = z
+  .object({
+    id: z.uuid(),
+    externalId: z.string().min(1).max(64),
+    direction: z.enum(callDirections),
+    disposition: z.enum(callDispositions),
+    fromNumber: phoneNumber,
+    toNumber: phoneNumber,
+    startedAt: z.date(),
+    durationSeconds: z.int().min(0),
+    contactId: z.uuid().nullable(),
+    dealId: z.uuid().nullable(),
+    // Nobody's call until somebody claims it; see the scope note in the service.
+    ownerId: z.uuid().nullable(),
+    recordingUrl: z.string().max(512).nullable(),
+    notes: z.string().max(2000).nullable(),
+    version: versionNumberSchema,
+    createdAt: z.date(),
+    updatedAt: z.date(),
+  })
+  .meta({ id: 'Call' });
+
+export type CallDto = Readonly<z.infer<typeof callSchema>>;
 
 export interface CallAccess {
   readonly actorId: string;
@@ -56,16 +68,20 @@ export interface LinkCallData {
  * became rows, and how many were already known by their external id.
  * `fetched === created + skipped` always holds.
  */
-export interface CallSyncResult {
-  readonly fetched: number;
-  readonly created: number;
-  readonly skipped: number;
-}
+export const callSyncResultSchema = z.object({
+  fetched: z.int().min(0),
+  created: z.int().min(0),
+  skipped: z.int().min(0),
+});
 
-export interface CallRecordingDto {
-  readonly url: string;
-  readonly expiresAt: Date;
-}
+export type CallSyncResult = Readonly<z.infer<typeof callSyncResultSchema>>;
+
+export const callRecordingSchema = z.object({
+  url: z.string().max(512),
+  expiresAt: z.date(),
+});
+
+export type CallRecordingDto = Readonly<z.infer<typeof callRecordingSchema>>;
 
 export const callSortFields = ['startedAt', 'createdAt', 'durationSeconds'] as const;
 export type CallSortField = (typeof callSortFields)[number];

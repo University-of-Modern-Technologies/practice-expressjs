@@ -1,23 +1,36 @@
+import { z } from 'zod';
+
+import {
+  currencyCodeSchema,
+  decimalStringSchema,
+  versionNumberSchema,
+} from '../../common/openapi/index.js';
 import type { PermissionScope } from '../rbac/types.js';
 
 export const dealStages = ['LEAD', 'QUALIFIED', 'PROPOSAL', 'WON', 'LOST'] as const;
 export type DealStage = (typeof dealStages)[number];
 
-export interface DealDto {
-  readonly id: string;
-  readonly ownerId: string;
-  readonly contactId: string | null;
-  readonly title: string;
-  readonly stage: DealStage;
-  readonly amount: string;
-  readonly currency: string;
-  readonly probability: number;
-  readonly version: number;
-  readonly expectedCloseDate: Date | null;
-  readonly closedAt: Date | null;
-  readonly createdAt: Date;
-  readonly updatedAt: Date;
-}
+export const dealStageSchema = z.enum(dealStages).meta({ id: 'DealStage' });
+
+export const dealSchema = z
+  .object({
+    id: z.uuid(),
+    ownerId: z.uuid(),
+    contactId: z.uuid().nullable(),
+    title: z.string(),
+    stage: dealStageSchema,
+    amount: decimalStringSchema,
+    currency: currencyCodeSchema,
+    probability: z.int().min(0).max(100),
+    version: versionNumberSchema,
+    expectedCloseDate: z.date().nullable(),
+    closedAt: z.date().nullable(),
+    createdAt: z.date(),
+    updatedAt: z.date(),
+  })
+  .meta({ id: 'Deal' });
+
+export type DealDto = Readonly<z.infer<typeof dealSchema>>;
 
 export interface DealAccess {
   readonly actorId: string;

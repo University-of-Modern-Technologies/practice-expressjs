@@ -1,22 +1,27 @@
 import { z } from 'zod';
 
-const address = z.object({
-  country: z
-    .string()
-    .trim()
-    .regex(/^[A-Za-z]{2}$/, 'Expected an ISO 3166-1 alpha-2 country code')
-    .transform((value) => value.toUpperCase()),
-  city: z.string().trim().min(1).max(120),
-  postalCode: z.string().trim().min(1).max(20),
-  line1: z.string().trim().min(1).max(200),
-});
+const address = z
+  .object({
+    country: z
+      .string()
+      .trim()
+      .regex(/^[A-Za-z]{2}$/, 'Expected an ISO 3166-1 alpha-2 country code')
+      .transform((value) => value.toUpperCase())
+      .meta({ description: 'Код країни ISO 3166-1 alpha-2.' }),
+    city: z.string().trim().min(1).max(120),
+    postalCode: z.string().trim().min(1).max(20),
+    line1: z.string().trim().min(1).max(200),
+  })
+  .meta({ id: 'DeliveryAddress' });
 
-const parcel = z.object({
-  weightGrams: z.number().int().min(1).max(1_000_000),
-  lengthCm: z.number().int().min(1).max(500),
-  widthCm: z.number().int().min(1).max(500),
-  heightCm: z.number().int().min(1).max(500),
-});
+const parcel = z
+  .object({
+    weightGrams: z.number().int().min(1).max(1_000_000),
+    lengthCm: z.number().int().min(1).max(500),
+    widthCm: z.number().int().min(1).max(500),
+    heightCm: z.number().int().min(1).max(500),
+  })
+  .meta({ id: 'DeliveryParcel' });
 
 const money = z
   .string()

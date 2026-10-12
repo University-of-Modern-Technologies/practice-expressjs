@@ -7,7 +7,7 @@ export const loginSchema = z.object({
       .trim()
       .email()
       .transform((value) => value.toLowerCase()),
-    password: z.string().min(8).max(128),
+    password: z.string().min(8).max(128).meta({ format: 'password' }),
   }),
 });
 

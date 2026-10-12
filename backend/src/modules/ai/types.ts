@@ -1,3 +1,5 @@
+import { z } from 'zod';
+
 /**
  * Categories the classifier is allowed to return. The list is closed on
  * purpose: a language model will happily invent a label, and an invented label
@@ -34,20 +36,30 @@ export interface DealSummaryInput {
   readonly notes?: string | undefined;
 }
 
-export interface DealSummaryDto {
-  readonly dealId: string;
-  readonly summary: string;
-  readonly provider: string;
-  readonly cached: boolean;
-}
+export const dealSummarySchema = z
+  .object({
+    dealId: z.uuid(),
+    summary: z.string(),
+    provider: z.string().meta({ description: 'Ідентифікатор провайдера, напр. `mock`.' }),
+    cached: z.boolean().meta({ description: 'Відповідь віддано з кешу.' }),
+  })
+  .meta({ id: 'AiDealSummary' });
+
+export type DealSummaryDto = Readonly<z.infer<typeof dealSummarySchema>>;
 
 export interface InquiryClassificationInput {
   readonly text: string;
 }
 
-export interface InquiryClassificationDto {
-  readonly category: ResolvedInquiryCategory;
-  readonly confidence: number;
-  readonly provider: string;
-  readonly cached: boolean;
-}
+export const inquiryClassificationSchema = z
+  .object({
+    category: z.enum([...inquiryCategories, UNKNOWN_INQUIRY_CATEGORY]).meta({
+      description: '`unknown` — модель повернула значення поза закритим списком.',
+    }),
+    confidence: z.number().min(0).max(1),
+    provider: z.string(),
+    cached: z.boolean(),
+  })
+  .meta({ id: 'AiInquiryClassification' });
+
+export type InquiryClassificationDto = Readonly<z.infer<typeof inquiryClassificationSchema>>;

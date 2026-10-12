@@ -132,6 +132,8 @@ export interface CompositionRoot {
   readonly logger: Logger;
   readonly realtime: RealtimeGateway;
   readonly events: EventStoreService;
+  /** The business routers as mounted; the API description is checked against them. */
+  readonly routers: readonly MountedRouter[];
   /** Connects the dependencies that are established outside the request path. */
   start(): Promise<void>;
   close(): Promise<void>;
@@ -460,6 +462,7 @@ export const createCompositionRoot = (config: AppConfig): CompositionRoot => {
     logger,
     realtime,
     events,
+    routers,
     async start() {
       await connectEventStore(config, logger);
     },

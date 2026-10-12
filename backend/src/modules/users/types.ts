@@ -1,17 +1,27 @@
-export interface UserRoleDto {
-  id: string;
-  name: string;
-}
+import { z } from 'zod';
 
-export interface UserDto {
-  id: string;
-  email: string;
-  name: string;
-  isActive: boolean;
-  roles: UserRoleDto[];
-  createdAt: Date;
-  updatedAt: Date;
-}
+export const userRoleSchema = z
+  .object({
+    id: z.uuid(),
+    name: z.string(),
+  })
+  .meta({ id: 'RoleSummary' });
+
+export type UserRoleDto = z.infer<typeof userRoleSchema>;
+
+export const userSchema = z
+  .object({
+    id: z.uuid(),
+    email: z.email(),
+    name: z.string(),
+    isActive: z.boolean(),
+    roles: z.array(userRoleSchema),
+    createdAt: z.date(),
+    updatedAt: z.date(),
+  })
+  .meta({ id: 'User' });
+
+export type UserDto = z.infer<typeof userSchema>;
 
 export interface UserListResult {
   readonly items: readonly UserDto[];
@@ -20,16 +30,20 @@ export interface UserListResult {
   readonly total: number;
 }
 
-export interface UserSessionDto {
-  id: string;
-  userId: string;
-  expiresAt: Date;
-  revokedAt: Date | null;
-  ipAddress: string | null;
-  userAgent: string | null;
-  createdAt: Date;
-  updatedAt: Date;
-}
+export const userSessionSchema = z
+  .object({
+    id: z.uuid(),
+    userId: z.uuid(),
+    expiresAt: z.date(),
+    revokedAt: z.date().nullable(),
+    ipAddress: z.string().nullable(),
+    userAgent: z.string().nullable(),
+    createdAt: z.date(),
+    updatedAt: z.date(),
+  })
+  .meta({ id: 'UserSession' });
+
+export type UserSessionDto = z.infer<typeof userSessionSchema>;
 
 export interface CreateUserData {
   email: string;

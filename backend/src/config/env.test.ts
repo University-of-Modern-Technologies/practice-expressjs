@@ -43,4 +43,21 @@ describe('loadConfig', () => {
   it('allows the web client origin by default', () => {
     expect(loadConfig(source()).corsOrigins).toEqual(['http://localhost:3000']);
   });
+
+  it('serves the API description everywhere except production by default', () => {
+    expect(loadConfig(source()).apiDocsEnabled).toBe(true);
+    expect(loadConfig(source({ APP_ENV: 'test' })).apiDocsEnabled).toBe(true);
+    expect(loadConfig(source({ APP_ENV: 'production' })).apiDocsEnabled).toBe(false);
+  });
+
+  it('lets API_DOCS_ENABLED override the default in either direction', () => {
+    expect(
+      loadConfig(source({ APP_ENV: 'production', API_DOCS_ENABLED: 'true' })).apiDocsEnabled,
+    ).toBe(true);
+    expect(loadConfig(source({ API_DOCS_ENABLED: 'false' })).apiDocsEnabled).toBe(false);
+  });
+
+  it('rejects an API_DOCS_ENABLED that is not a boolean', () => {
+    expect(() => loadConfig(source({ API_DOCS_ENABLED: 'maybe' }))).toThrow(/API_DOCS_ENABLED/);
+  });
 });

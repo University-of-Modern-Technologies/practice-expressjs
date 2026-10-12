@@ -21,7 +21,8 @@ export interface ReadinessCheck {
   readonly timeoutMs?: number;
 }
 
-export type ReadinessStatus = 'up' | 'down' | 'timed_out';
+export const readinessStatuses = ['up', 'down', 'timed_out'] as const;
+export type ReadinessStatus = (typeof readinessStatuses)[number];
 
 export interface ReadinessCheckResult {
   readonly name: string;

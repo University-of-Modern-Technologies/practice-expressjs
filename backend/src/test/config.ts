@@ -25,6 +25,7 @@ const baseTestConfig: AppConfig = {
   mongodbUrl: 'mongodb://localhost:27017/practice_events_test',
   eventLogRetentionDays: 90,
   wsPath: '/api/v1/realtime',
+  apiDocsEnabled: true,
   shutdownGracePeriodMs: 10_000,
   shutdownTimeoutMs: 15_000,
   shutdownDrainDelayMs: 0,

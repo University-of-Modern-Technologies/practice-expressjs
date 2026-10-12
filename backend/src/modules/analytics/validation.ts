@@ -34,7 +34,8 @@ const isoInstant = z
   .refine((value) => !Number.isNaN(Date.parse(value)), {
     message: 'Expected an ISO 8601 date or timestamp',
   })
-  .transform((value) => new Date(value).toISOString());
+  .transform((value) => new Date(value).toISOString())
+  .meta({ description: 'Дата або мітка часу ISO 8601; нормалізується до UTC.' });
 
 interface RangeInput {
   readonly from?: string | undefined;
@@ -76,7 +77,10 @@ const boundedLimit = z.coerce
   .int()
   .min(1)
   .transform((value) => Math.min(value, MAX_LIMIT))
-  .default(DEFAULT_LIMIT);
+  .default(DEFAULT_LIMIT)
+  .meta({
+    description: `Значення понад ${String(MAX_LIMIT)} обрізаються до ${String(MAX_LIMIT)}, а не відхиляються.`,
+  });
 
 export const salesSummarySchema = z.object({
   query: z
