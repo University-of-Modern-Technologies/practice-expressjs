@@ -1,8 +1,8 @@
 import { describe, expect, it, jest } from '@jest/globals';
 
 import { AppError } from '../../common/errors/index.js';
-import { defaultReportWindowTo } from '../../common/reporting/index.js';
 import type { DomainEventNotification, DomainEventPublisher } from '../../common/types/index.js';
+import { DEFAULT_KYIV_WINDOW_FROM, defaultKyivWindowTo } from '../analytics/kyiv-time.js';
 import type { AuditService } from '../audit/service.js';
 import { bankProviderUnavailableError, type BankProvider } from './provider.js';
 import { createFinanceService, type FinanceDatabase } from './service.js';
@@ -42,6 +42,7 @@ interface TransactionRow {
   matchedOrderId: string | null;
   matchedById: string | null;
   matchedAt: Date | null;
+  autoMatchDisabled: boolean;
   version: number;
   createdAt: Date;
   updatedAt: Date;
@@ -56,6 +57,8 @@ interface OrderRow {
   contactId: string | null;
   placedAt: Date | null;
   contact: { firstName: string; lastName: string; company: string | null } | null;
+  /** Read only by a manual match: the payment that already settles the order. */
+  bankTransaction?: { id: string } | null;
 }
 
 // `10000` rather than `10000.00`: this is how Postgres hands a Decimal(14,2)
@@ -91,6 +94,7 @@ const unmatchedRow: TransactionRow = {
   matchedOrderId: null,
   matchedById: null,
   matchedAt: null,
+  autoMatchDisabled: false,
   version: 1,
   createdAt: new Date('2026-02-01T09:00:00.000Z'),
   updatedAt: new Date('2026-02-01T09:00:00.000Z'),
@@ -656,7 +660,7 @@ describe('finance service reconciliation', () => {
 
     expect(harness.findTransactions).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { matchStatus: { in: ['UNMATCHED', 'SUGGESTED'] } },
+        where: { matchStatus: { in: ['UNMATCHED', 'SUGGESTED'] }, autoMatchDisabled: false },
         take: 200,
       }),
     );
@@ -727,23 +731,25 @@ describe('finance service summary', () => {
     });
   });
 
-  it('fills each absent bound from the shared default: 1 January to today', async () => {
+  it('fills each absent bound from the default: 1 January to today, in Kyiv', async () => {
     const harness = createHarness();
 
+    // Kyiv midnight of 1 January is 22:00 UTC on 31 December.
+    expect(DEFAULT_KYIV_WINDOW_FROM).toBe('2025-12-31T22:00:00.000Z');
     await expect(harness.service.summary(access, {})).resolves.toMatchObject({
-      from: '2026-01-01T00:00:00.000Z',
-      to: defaultReportWindowTo(),
+      from: DEFAULT_KYIV_WINDOW_FROM,
+      to: defaultKyivWindowTo(),
     });
     await expect(
       harness.service.summary(access, { from: '2026-01-15T00:00:00.000Z' }),
     ).resolves.toMatchObject({
       from: '2026-01-15T00:00:00.000Z',
-      to: defaultReportWindowTo(),
+      to: defaultKyivWindowTo(),
     });
     await expect(
       harness.service.summary(access, { to: '2026-01-20T00:00:00.000Z' }),
     ).resolves.toMatchObject({
-      from: '2026-01-01T00:00:00.000Z',
+      from: DEFAULT_KYIV_WINDOW_FROM,
       to: '2026-01-20T00:00:00.000Z',
     });
   });
@@ -1029,5 +1035,228 @@ describe('finance service regressions', () => {
       amount: '2999999999999.97',
       share: 0.75,
     });
+  });
+});
+
+describe('finance service decisions on money', () => {
+  const debitRow: TransactionRow = {
+    ...unmatchedRow,
+    direction: 'DEBIT',
+    reference: 'Refund for order ORD-2026-0001',
+  };
+
+  // Two payments, each identifying its own order and nothing else.
+  const orderTwo: OrderRow = {
+    ...orderRow,
+    id: 'order-2',
+    orderNumber: 'ORD-2026-0002',
+    contact: null,
+  };
+  const paymentForOrderTwo: TransactionRow = {
+    ...unmatchedRow,
+    id: 'txn-2',
+    externalId: 'stub-txn-0002',
+    counterpartyName: 'Someone Else',
+    reference: 'ORD-2026-0002',
+  };
+
+  // An order is settled by at most one payment.
+  it('refuses to settle an order another payment already settles', async () => {
+    const harness = createHarness({ order: { ...orderRow, bankTransaction: { id: 'txn-9' } } });
+
+    await expect(
+      harness.service.match(access, unmatchedRow.id, { version: 1, orderId: 'order-1' }),
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      code: 'ORDER_ALREADY_MATCHED',
+      details: { orderId: 'order-1' },
+    } satisfies Partial<AppError>);
+    expect(harness.findOrder).toHaveBeenCalledWith(
+      expect.objectContaining({
+        select: expect.objectContaining({ bankTransaction: { select: { id: true } } }),
+      }),
+    );
+    expect(harness.updateTransaction).not.toHaveBeenCalled();
+    expect(harness.publish).not.toHaveBeenCalled();
+  });
+
+  it('reports a race the unique index caught as the same conflict, not a fault', async () => {
+    const harness = createHarness({
+      update: async () => {
+        throw { code: 'P2002', meta: { target: ['matched_order_id'] } };
+      },
+    });
+
+    await expect(
+      harness.service.match(access, unmatchedRow.id, { version: 1, orderId: 'order-1' }),
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      code: 'ORDER_ALREADY_MATCHED',
+      details: { orderId: 'order-1' },
+    } satisfies Partial<AppError>);
+    expect(harness.record).not.toHaveBeenCalled();
+    expect(harness.publish).not.toHaveBeenCalled();
+  });
+
+  it('offers the rule only orders that no payment settles yet', async () => {
+    const harness = createHarness();
+
+    await harness.service.reconcile(access);
+
+    expect(harness.findOrders).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ bankTransaction: { is: null } }),
+      }),
+    );
+  });
+
+  it('settles an order once in a batch that holds two payments for it', async () => {
+    const harness = createHarness({
+      pending: [unmatchedRow, { ...unmatchedRow, id: 'txn-2', externalId: 'stub-txn-0002' }],
+    });
+
+    // The order book is read once, before the first write; the second payment
+    // must not be matched to the order the first one has just closed.
+    await expect(harness.service.reconcile(access)).resolves.toEqual({
+      examined: 2,
+      matched: 1,
+      suggested: 0,
+      unmatched: 1,
+      ignored: 0,
+    });
+    expect(harness.updateTransaction).toHaveBeenCalledTimes(1);
+    expect(harness.updateTransaction).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: unmatchedRow.id, version: 1 } }),
+    );
+  });
+
+  it('skips a row whose order a concurrent request settled, and goes on', async () => {
+    const harness = createHarness({
+      pending: [unmatchedRow, paymentForOrderTwo],
+      orders: [orderRow, orderTwo],
+      update: jest
+        .fn<(args: unknown) => Promise<unknown>>()
+        .mockImplementationOnce(() =>
+          Promise.reject({ code: 'P2002', meta: { target: ['matched_order_id'] } }),
+        )
+        .mockImplementation(() =>
+          Promise.resolve({ ...matchedRow, id: 'txn-2', matchedOrderId: 'order-2' }),
+        ),
+    });
+
+    await expect(harness.service.reconcile(access)).resolves.toEqual({
+      examined: 2,
+      matched: 1,
+      suggested: 0,
+      unmatched: 0,
+      ignored: 0,
+    });
+    expect(harness.publish).toHaveBeenCalledTimes(1);
+    expect(harness.publish).toHaveBeenCalledWith(expect.objectContaining({ entityId: 'txn-2' }));
+  });
+
+  // A payment in one currency does not settle an order in another.
+  it('refuses a manual match across currencies before comparing amounts', async () => {
+    const harness = createHarness({ order: { ...orderRow, currency: 'EUR' } });
+
+    await expect(
+      harness.service.match(access, unmatchedRow.id, { version: 1, orderId: 'order-1' }),
+    ).rejects.toMatchObject({
+      statusCode: 422,
+      code: 'CURRENCY_MISMATCH',
+      details: { currency: 'USD', orderCurrency: 'EUR' },
+    } satisfies Partial<AppError>);
+    expect(harness.updateTransaction).not.toHaveBeenCalled();
+  });
+
+  it('never matches automatically across currencies', async () => {
+    const harness = createHarness({ orders: [{ ...orderRow, currency: 'EUR' }] });
+
+    await expect(harness.service.reconcile(access)).resolves.toMatchObject({
+      matched: 0,
+      unmatched: 1,
+    });
+    expect(harness.updateTransaction).not.toHaveBeenCalled();
+  });
+
+  // Money going out does not settle an order, even by hand.
+  it('refuses to match an outgoing payment by hand', async () => {
+    const harness = createHarness({ existing: debitRow });
+
+    await expect(
+      harness.service.match(access, debitRow.id, { version: 1, orderId: 'order-1' }),
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      code: 'TRANSACTION_NOT_INCOMING',
+    } satisfies Partial<AppError>);
+    expect(harness.findOrder).not.toHaveBeenCalled();
+    expect(harness.updateTransaction).not.toHaveBeenCalled();
+  });
+
+  it('never matches an outgoing payment automatically', async () => {
+    const harness = createHarness({ pending: [debitRow] });
+
+    await expect(harness.service.reconcile(access)).resolves.toMatchObject({
+      matched: 0,
+      ignored: 1,
+    });
+    expect(harness.updateTransaction).not.toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ matchStatus: 'MATCHED' }) }),
+    );
+  });
+
+  // A match a person took back stays taken back.
+  it('marks a match taken back by hand so the rule leaves it alone', async () => {
+    const harness = createHarness({
+      existing: { ...matchedRow, version: 2 },
+      update: async () => ({ ...unmatchedRow, autoMatchDisabled: true, version: 3 }),
+    });
+
+    const result = await harness.service.unmatch(access, matchedRow.id, 2);
+
+    expect(result.autoMatchDisabled).toBe(true);
+    expect(harness.updateTransaction).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ autoMatchDisabled: true }) }),
+    );
+  });
+
+  it('lets a person match such a row by hand again, and clears the mark', async () => {
+    const harness = createHarness({ existing: { ...unmatchedRow, autoMatchDisabled: true } });
+
+    const result = await harness.service.match(access, unmatchedRow.id, {
+      version: 1,
+      orderId: 'order-1',
+    });
+
+    expect(result).toMatchObject({ matchStatus: 'MATCHED', autoMatchDisabled: false });
+    expect(harness.updateTransaction).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ autoMatchDisabled: false }) }),
+    );
+  });
+
+  it('shows the mark on every transaction it returns', async () => {
+    const harness = createHarness();
+
+    const page = await harness.service.listTransactions(access, transactionQuery);
+
+    expect(page.items[0]).toHaveProperty('autoMatchDisabled', false);
+  });
+
+  // Each automatic match commits on its own, so it is announced as soon
+  // as its own commit is behind it rather than after the whole loop.
+  it('announces each automatic match right after its own commit', async () => {
+    const publishedBeforeWrite: number[] = [];
+    const harness = createHarness({
+      pending: [unmatchedRow, paymentForOrderTwo],
+      orders: [orderRow, orderTwo],
+      update: async () => {
+        publishedBeforeWrite.push(published());
+        return matchedRow;
+      },
+    });
+    const published = (): number => harness.publish.mock.calls.length;
+
+    await expect(harness.service.reconcile(access)).resolves.toMatchObject({ matched: 2 });
+    expect(publishedBeforeWrite).toEqual([0, 1]);
   });
 });

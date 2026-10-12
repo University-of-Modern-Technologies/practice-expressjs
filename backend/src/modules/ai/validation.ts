@@ -21,10 +21,9 @@ export const summariseDealSchema = z.object({
       .transform((value) => value.toUpperCase())
       .optional(),
     probability: z.number().int().min(0).max(100).optional(),
-    expectedCloseDate: z
-      .string()
-      .regex(/^\d{4}-\d{2}-\d{2}$/, 'Expected YYYY-MM-DD')
-      .optional(),
+    // The same calendar day the deal itself carries: `YYYY-MM-DD`, and a real
+    // one, so 2026-02-31 is refused rather than passed into a prompt.
+    expectedCloseDate: z.iso.date().optional(),
     notes: z.string().trim().min(1).max(DEFAULT_AI_MAX_INPUT_CHARS).optional(),
   }),
 });

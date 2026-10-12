@@ -257,6 +257,8 @@ model Order {
   ownerId          String            @map("owner_id") @db.Uuid
   contactId        String?           @map("contact_id") @db.Uuid
   dealId           String?           @map("deal_id") @db.Uuid
+  /// The warehouse the order reserved stock in; set on confirmation.
+  warehouseId      String?           @map("warehouse_id") @db.Uuid
   status           OrderStatus       @default(DRAFT)
   currency         String            @default("USD") @db.Char(3)
   subtotal         Decimal           @default(0) @db.Decimal(14, 2)
@@ -272,12 +274,14 @@ model Order {
   owner            User              @relation("OrderOwner", fields: [ownerId], references: [id], onDelete: Restrict)
   contact          Contact?          @relation(fields: [contactId], references: [id], onDelete: SetNull)
   deal             Deal?             @relation(fields: [dealId], references: [id], onDelete: SetNull)
+  warehouse        Warehouse?        @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
   items            OrderItem[]
-  bankTransactions BankTransaction[]
+  bankTransaction  BankTransaction?
 
   @@index([ownerId, status, deletedAt])
   @@index([contactId])
   @@index([dealId])
+  @@index([warehouseId])
   @@index([status, placedAt])
   @@index([deletedAt])
   @@map("orders")
@@ -312,6 +316,7 @@ model Warehouse {
   updatedAt DateTime        @updatedAt @map("updated_at") @db.Timestamptz(3)
   stock     StockLevel[]
   movements StockMovement[]
+  orders    Order[]
 
   @@map("warehouses")
 }
@@ -493,9 +498,12 @@ model BankTransaction {
   counterpartyAccount String?              @map("counterparty_account") @db.VarChar(64)
   reference           String               @db.VarChar(300)
   matchStatus         PaymentMatchStatus   @default(UNMATCHED) @map("match_status")
-  matchedOrderId      String?              @map("matched_order_id") @db.Uuid
+  /// An order is settled by at most one payment.
+  matchedOrderId      String?              @unique @map("matched_order_id") @db.Uuid
   matchedById         String?              @map("matched_by_id") @db.Uuid
   matchedAt           DateTime?            @map("matched_at") @db.Timestamptz(3)
+  /// Set when a person removes a match; automatic reconciliation skips the row.
+  autoMatchDisabled   Boolean              @default(false) @map("auto_match_disabled")
   version             Int                  @default(1)
   createdAt           DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt           DateTime             @updatedAt @map("updated_at") @db.Timestamptz(3)
@@ -505,7 +513,6 @@ model BankTransaction {
 
   @@index([statementId, bookedAt])
   @@index([matchStatus, bookedAt])
-  @@index([matchedOrderId])
   @@index([bookedAt])
   @@map("bank_transactions")
 }

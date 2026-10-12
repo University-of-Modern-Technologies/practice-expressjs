@@ -37,6 +37,7 @@ const DAY_MS = 86_400_000;
 /** What the rule needs to know about the transaction being reconciled. */
 export interface MatchableTransaction {
   readonly amount: string;
+  readonly currency: string;
   readonly bookedAt: Date;
   readonly direction: TransactionDirection;
   readonly counterpartyName: string;
@@ -50,6 +51,7 @@ export interface MatchableOrder {
   readonly orderNumber: string;
   readonly status: string;
   readonly total: string;
+  readonly currency: string;
   /**
    * When the order was placed — not when its row was written. The two differ
    * by however long the data has been sitting in the database, and a window
@@ -118,12 +120,19 @@ export const counterpartyMatchesContact = (
   );
 };
 
-/** Condition 3: the amounts agree to within the tolerance, in whole cents. */
+/** Condition 3, second half: the amounts agree to within the tolerance, in whole cents. */
 export const amountsAgree = (left: string, right: string): boolean => {
   const difference = toMinorUnits(left) - toMinorUnits(right);
   const distance = difference < 0n ? -difference : difference;
   return distance <= MATCH_AMOUNT_TOLERANCE_MINOR_UNITS;
 };
+
+/**
+ * Condition 3, first half: the payment is in the order's currency. Amounts in
+ * two currencies cannot settle each other however close the numbers are — a
+ * payment of 1800 USD is not an order of 1800 EUR.
+ */
+export const currenciesAgree = (left: string, right: string): boolean => left === right;
 
 /**
  * Condition 4: money for an order cannot arrive before the order exists, and
@@ -137,7 +146,10 @@ export const bookedWithinWindow = (bookedAt: Date, orderPlacedAt: Date | null): 
   return booked >= placed && booked <= placed + MATCH_WINDOW_DAYS * DAY_MS;
 };
 
-/** All four conditions, in the order the specification states them. */
+/**
+ * All four conditions, in the order the specification states them. A payment
+ * going out never qualifies: `findMatchCandidates` drops it before this runs.
+ */
 export const isMatchCandidate = (
   transaction: MatchableTransaction,
   order: MatchableOrder,
@@ -149,6 +161,7 @@ export const isMatchCandidate = (
       order.contactName,
       order.contactCompany,
     )) &&
+  currenciesAgree(transaction.currency, order.currency) &&
   amountsAgree(transaction.amount, order.total) &&
   bookedWithinWindow(transaction.bookedAt, order.placedAt);
 

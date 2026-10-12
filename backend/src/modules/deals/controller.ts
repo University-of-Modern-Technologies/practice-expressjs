@@ -1,5 +1,5 @@
 import type { Request, RequestHandler } from 'express';
-import { AppError, validationError } from '../../common/errors/index.js';
+import { AppError, describeValidationIssues, validationError } from '../../common/errors/index.js';
 import type { AuthContext } from '../../common/types/auth-context.js';
 import type { RbacService } from '../rbac/service.js';
 import type { PermissionScope } from '../rbac/types.js';
@@ -50,7 +50,7 @@ export const createDealsController = (
 ): DealsController => ({
   list: async (request, response) => {
     const parsed = listDealsSchema.safeParse({ query: request.query });
-    if (!parsed.success) throw validationError(parsed.error.flatten());
+    if (!parsed.success) throw validationError(describeValidationIssues(parsed.error));
     const auth = getAuth(request);
     const scope = await getScope(rbac, auth.userId, 'read');
     response.json({
@@ -60,7 +60,7 @@ export const createDealsController = (
 
   getById: async (request, response) => {
     const parsed = getDealSchema.safeParse({ params: request.params });
-    if (!parsed.success) throw validationError(parsed.error.flatten());
+    if (!parsed.success) throw validationError(describeValidationIssues(parsed.error));
     const auth = getAuth(request);
     const scope = await getScope(rbac, auth.userId, 'read');
     response.json({
@@ -70,7 +70,7 @@ export const createDealsController = (
 
   create: async (request, response) => {
     const parsed = createDealSchema.safeParse({ body: request.body });
-    if (!parsed.success) throw validationError(parsed.error.flatten());
+    if (!parsed.success) throw validationError(describeValidationIssues(parsed.error));
     const auth = getAuth(request);
     const scope = await getScope(rbac, auth.userId, 'write');
     response.status(201).json({
@@ -80,7 +80,7 @@ export const createDealsController = (
 
   update: async (request, response) => {
     const parsed = updateDealSchema.safeParse({ params: request.params, body: request.body });
-    if (!parsed.success) throw validationError(parsed.error.flatten());
+    if (!parsed.success) throw validationError(describeValidationIssues(parsed.error));
     const auth = getAuth(request);
     const scope = await getScope(rbac, auth.userId, 'write');
     response.json({
@@ -94,7 +94,7 @@ export const createDealsController = (
 
   transition: async (request, response) => {
     const parsed = transitionDealSchema.safeParse({ params: request.params, body: request.body });
-    if (!parsed.success) throw validationError(parsed.error.flatten());
+    if (!parsed.success) throw validationError(describeValidationIssues(parsed.error));
     const auth = getAuth(request);
     const scope = await getScope(rbac, auth.userId, 'write');
     response.json({
@@ -108,7 +108,7 @@ export const createDealsController = (
 
   delete: async (request, response) => {
     const parsed = deleteDealSchema.safeParse({ params: request.params, query: request.query });
-    if (!parsed.success) throw validationError(parsed.error.flatten());
+    if (!parsed.success) throw validationError(describeValidationIssues(parsed.error));
     const auth = getAuth(request);
     const scope = await getScope(rbac, auth.userId, 'delete');
     await service.delete(

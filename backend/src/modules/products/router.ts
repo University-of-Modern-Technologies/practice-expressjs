@@ -58,9 +58,10 @@ export const createProductsRouter = (
       description:
         'Потребує дозволу `products:write`. SKU нормалізується до верхнього регістру. ' +
         'Помилки: 409 `PRODUCT_SKU_TAKEN`; 409 `PRODUCT_SKU_RETIRED` — SKU належав ' +
-        'видаленому товару й повторно не видається; 400 `INVALID_PRODUCT_PRICE`.',
+        'видаленому товару й повторно не видається; 400 `INVALID_PRODUCT_PRICE`; ' +
+        '422 `CURRENCY_NOT_SUPPORTED` — валюта відрізняється від валюти організації.',
       response: created('Товар створено', productSchema),
-      refusals: refusals(401, 403, 409),
+      refusals: refusals(401, 403, 409, 422),
     },
     controller.authorize.write,
     validate(createProductSchema),
@@ -74,9 +75,10 @@ export const createProductsRouter = (
         'Потребує дозволу `products:write`. `version` обовʼязковий: якщо він не збігається з ' +
         'поточним, повертається 409 `PRODUCT_CONCURRENT_MODIFICATION`. SKU незмінний і не ' +
         'приймається. Помилки: 404 `PRODUCT_NOT_FOUND`, 409 `PRODUCT_SKU_TAKEN`, ' +
-        '400 `INVALID_PRODUCT_PRICE`.',
+        '400 `INVALID_PRODUCT_PRICE`; 422 `CURRENCY_NOT_SUPPORTED` — валюта відрізняється ' +
+        'від валюти організації.',
       response: ok('Товар оновлено', productSchema),
-      refusals: refusals(401, 403, 404, 409),
+      refusals: refusals(401, 403, 404, 409, 422),
     },
     controller.authorize.write,
     validate(updateProductSchema),

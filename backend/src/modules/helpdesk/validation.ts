@@ -1,11 +1,6 @@
+import { MAX_PAGE } from '../../common/query/pagination.js';
 import { z } from 'zod';
-import {
-  MAX_HELPDESK_PAGE,
-  ticketChannels,
-  ticketPriorities,
-  ticketSortFields,
-  ticketStatuses,
-} from './types.js';
+import { ticketChannels, ticketPriorities, ticketSortFields, ticketStatuses } from './types.js';
 
 const idParams = z.object({ id: z.string().uuid() });
 const timestamp = z.string().datetime({ offset: true });
@@ -20,7 +15,7 @@ const body = z.string().trim().min(1).max(5000);
 export const listTicketsSchema = z.object({
   query: z
     .object({
-      page: z.coerce.number().int().min(1).max(MAX_HELPDESK_PAGE).default(1),
+      page: z.coerce.number().int().min(1).max(MAX_PAGE).default(1),
       pageSize: z.coerce.number().int().min(1).max(100).default(20),
       search: z.string().trim().min(1).max(160).optional(),
       status: z.enum(ticketStatuses).optional(),

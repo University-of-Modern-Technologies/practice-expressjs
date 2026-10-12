@@ -71,7 +71,7 @@ export const createDealsRouter = (
     {
       summary: 'Створити угоду',
       response: created('Угоду створено', dealSchema),
-      refusals: refusals(401, 403, 404),
+      refusals: refusals(401, 403, 404, 422),
     },
     allowed('write'),
     validate(createDealSchema),
@@ -82,7 +82,7 @@ export const createDealsRouter = (
     {
       summary: 'Оновити угоду без зміни stage',
       response: ok('Угоду оновлено', dealSchema),
-      refusals: refusals(401, 403, 404, 409),
+      refusals: refusals(401, 403, 404, 409, 422),
     },
     allowed('write'),
     validate(updateDealSchema),

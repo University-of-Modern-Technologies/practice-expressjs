@@ -16,6 +16,13 @@ export type StockMovementType = (typeof stockMovementTypes)[number];
 /** Resource name used to build the `warehouse:read` / `warehouse:write` keys. */
 export const WAREHOUSE_RESOURCE = 'warehouse';
 
+/**
+ * The reference type an order writes on every movement it causes. Reservations
+ * held under it belong to the order: only the order's own transitions release
+ * or issue them, and reserving the same order line twice changes nothing.
+ */
+export const ORDER_REFERENCE_TYPE = 'order';
+
 export const warehouseSchema = z
   .object({
     id: z.uuid(),
@@ -57,7 +64,9 @@ export const stockMovementSchema = z
     warehouseId: z.uuid(),
     productId: z.uuid(),
     type: stockMovementTypeSchema,
-    quantity: z.int(),
+    quantity: z.int().meta({
+      description: 'Додатна для всіх рухів, крім ADJUSTMENT: коригування зберігає знак дельти.',
+    }),
     referenceType: z.string().nullable(),
     referenceId: z.uuid().nullable(),
     actorId: z.uuid().nullable(),
@@ -147,8 +156,9 @@ export interface ReceiveStockInput extends StockTargetInput {
 export interface IssueStockInput extends StockTargetInput {
   readonly quantity: number;
   /**
-   * When true the issue consumes an existing reservation, so the reserved
-   * counter is released by the same amount in the very same statement.
+   * When true the issue consumes an existing reservation: the reservation is
+   * released first and recorded as a `RELEASE` movement, then the goods leave
+   * as an `ISSUE`, so the ledger alone explains both counters.
    */
   readonly fromReservation?: boolean | undefined;
   readonly referenceType?: string | undefined;

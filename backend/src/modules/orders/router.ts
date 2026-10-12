@@ -84,9 +84,10 @@ export const createOrdersRouter = (
         'Помилки: 404 `CONTACT_NOT_FOUND`, `DEAL_NOT_FOUND`, ' +
         '`PRODUCT_NOT_FOUND`, `ORDER_OWNER_NOT_FOUND`; 409 `PRODUCT_INACTIVE`, ' +
         '`ORDER_CURRENCY_MISMATCH`, `ORDER_ITEM_DUPLICATE`, `ORDER_NUMBER_UNAVAILABLE`; ' +
+        '422 `CURRENCY_NOT_SUPPORTED` — валюта відрізняється від валюти організації; ' +
         `400 \`ORDER_TOTALS_INVALID\` — знижка більша за підсумок; ${amountNote}`,
       response: created('Замовлення створено', orderSchema),
-      refusals: refusals(401, 403, 404, 409),
+      refusals: refusals(401, 403, 404, 409, 422),
     },
     controller.authorize.write,
     validate(createOrderSchema),

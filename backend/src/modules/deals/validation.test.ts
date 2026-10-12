@@ -116,11 +116,18 @@ describe('numbers in a deal body', () => {
 
 describe('deal list bounds', () => {
   it('puts an upper bound on the page number', () => {
-    expect(listDealsSchema.safeParse({ query: { page: '1000000' } }).success).toBe(true);
-    expect(listDealsSchema.safeParse({ query: { page: '1000001' } }).success).toBe(false);
+    expect(listDealsSchema.safeParse({ query: { page: '100' } }).success).toBe(true);
+    expect(listDealsSchema.safeParse({ query: { page: '101' } }).success).toBe(false);
   });
 
   it('refuses a search made of whitespace only', () => {
     expect(listDealsSchema.safeParse({ query: { search: '   ' } }).success).toBe(false);
+  });
+});
+
+describe('deal dates on the way in', () => {
+  it('refuses a numeric timestamp where a calendar day belongs', () => {
+    const body = { title: 'X', amount: '1.00', expectedCloseDate: 1_798_675_200_000 };
+    expect(createDealSchema.safeParse({ body }).success).toBe(false);
   });
 });

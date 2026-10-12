@@ -308,15 +308,20 @@ export const createCallsService = (
       // it reaches the caller as 502 and touches nothing that is stored.
       const fetched = await provider.fetchCalls({ limit: batchLimit });
 
-      const created: CallDto[] = [];
+      let created = 0;
       let skipped = 0;
       for (const record of fetched) {
         const call = await importRecord(access, record);
-        if (call === null) skipped += 1;
-        else created.push(call);
-      }
-
-      for (const call of created) {
+        if (call === null) {
+          skipped += 1;
+          continue;
+        }
+        created += 1;
+        // Announced as soon as its own transaction has committed, not after
+        // the loop: each record is committed separately, so a failure further
+        // down the batch must not swallow the events of the calls already on
+        // file. Anything but a duplicate still aborts the run (see
+        // `importRecord`), and what was committed before it stays announced.
         announce({
           eventType: 'call.created',
           entityType: 'call',
@@ -326,7 +331,7 @@ export const createCallsService = (
         });
       }
 
-      return { fetched: fetched.length, created: created.length, skipped };
+      return { fetched: fetched.length, created, skipped };
     },
 
     async update(access, id, data) {

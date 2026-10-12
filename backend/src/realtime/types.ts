@@ -18,6 +18,22 @@ export const SOCKET_STATE = {
 /** Close code sent to every client during a graceful shutdown. */
 export const CLOSE_CODE_GOING_AWAY = 1001;
 
+/**
+ * Close code for a socket whose credentials stopped being valid: the access
+ * token it was opened with expired, or the session behind it ended — a logout,
+ * a revocation, a disabled account. It sits in the application range so a
+ * client can tell it from a transport failure. Reconnecting with a renewed
+ * token is the right answer to either case: a session that is really over is
+ * then refused at the handshake.
+ */
+export const CLOSE_CODE_SESSION_ENDED = 4001;
+
+/** Close reason sent with `CLOSE_CODE_SESSION_ENDED` when the token ran out. */
+export const CLOSE_REASON_TOKEN_EXPIRED = 'Access token expired';
+
+/** Close reason sent with `CLOSE_CODE_SESSION_ENDED` when the session ended. */
+export const CLOSE_REASON_SESSION_ENDED = 'Session ended';
+
 /** Payload shapes a transport may hand to a `message` listener. */
 export type RawSocketData = string | Buffer | ArrayBuffer | readonly Buffer[];
 
@@ -55,8 +71,24 @@ export interface RealtimeWebSocketServer {
 
 export type CreateWebSocketServer = () => RealtimeWebSocketServer;
 
+/**
+ * The identity a connection was opened with. `expiresAt` is when the access
+ * token presented at the handshake stops being valid; the socket is closed at
+ * that moment. An identity without it is held until the socket closes.
+ */
+export interface RealtimeIdentity extends AuthContext {
+  readonly expiresAt?: Date;
+}
+
+/** What a verified access token yields: the identity, and when it runs out. */
+export interface VerifiedAccessToken extends AuthContext {
+  readonly expiresAt: Date;
+}
+
 /** Verifies a JWT access token and resolves the identity it represents. */
-export type VerifyAccessToken = (accessToken: string) => Promise<AuthContext> | AuthContext;
+export type VerifyAccessToken = (
+  accessToken: string,
+) => Promise<VerifiedAccessToken> | VerifiedAccessToken;
 
 /** Authorisation hook: may this identity subscribe to this topic? */
 export type CanSubscribe = (auth: AuthContext, topic: RealtimeTopic) => Promise<boolean> | boolean;
@@ -108,10 +140,17 @@ export interface RealtimeGateway {
   /** Stops accepting upgrades and closes every socket with code 1001. */
   close(): Promise<void>;
   /**
+   * Closes, with `CLOSE_CODE_SESSION_ENDED`, every socket opened through one
+   * of these sessions. Called once the change that ended them has committed.
+   */
+  sessionsRevoked(sessionIds: readonly string[]): void;
+  /** The same, for every socket the user holds: all their sessions ended. */
+  userSessionsRevoked(userId: string): void;
+  /**
    * Registers an already authenticated socket. Used by `attach` and exposed so
    * the connection lifecycle can be driven directly in tests.
    */
-  handleConnection(socket: RealtimeSocket, auth: AuthContext): void;
+  handleConnection(socket: RealtimeSocket, auth: RealtimeIdentity): void;
   /** Current registry sizes; useful for health output and assertions. */
   getStats(): RealtimeGatewayStats;
 }

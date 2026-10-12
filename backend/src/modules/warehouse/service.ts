@@ -8,25 +8,26 @@ import {
 } from '../../common/types/domain-event-publisher.js';
 import type { Prisma, PrismaDatabase, PrismaTransaction } from '../../db/prisma.js';
 import type { AuditService } from '../audit/service.js';
-import type {
-  AdjustStockInput,
-  CreateWarehouseData,
-  IssueStockInput,
-  MovementListQuery,
-  MovementListResult,
-  ReceiveStockInput,
-  ReleaseStockInput,
-  ReserveStockInput,
-  StockLevelDto,
-  StockListQuery,
-  StockListResult,
-  StockMovementDto,
-  StockMovementType,
-  UpdateWarehouseData,
-  WarehouseAccess,
-  WarehouseDto,
-  WarehouseListQuery,
-  WarehouseListResult,
+import {
+  ORDER_REFERENCE_TYPE,
+  type AdjustStockInput,
+  type CreateWarehouseData,
+  type IssueStockInput,
+  type MovementListQuery,
+  type MovementListResult,
+  type ReceiveStockInput,
+  type ReleaseStockInput,
+  type ReserveStockInput,
+  type StockLevelDto,
+  type StockListQuery,
+  type StockListResult,
+  type StockMovementDto,
+  type StockMovementType,
+  type UpdateWarehouseData,
+  type WarehouseAccess,
+  type WarehouseDto,
+  type WarehouseListQuery,
+  type WarehouseListResult,
 } from './types.js';
 
 export type WarehouseTransaction = Pick<
@@ -61,7 +62,11 @@ export interface StockOperations {
  */
 export interface StockChangeInTransaction {
   readonly level: StockLevelDto;
-  readonly movement: StockMovementDto;
+  /**
+   * The last movement written; `null` when the request changed nothing — a
+   * repeated reservation of an order line the order already holds.
+   */
+  readonly movement: StockMovementDto | null;
   /**
    * Publishes the movement's domain event. The caller must invoke it only after
    * the transaction it supplied has committed, which keeps the after-commit
@@ -208,7 +213,7 @@ const stockCheckConstraints = [
   'stock_levels_quantities_non_negative_check',
   'stock_levels_reserved_within_on_hand_check',
   'stock_levels_version_positive_check',
-  'stock_movements_quantity_positive_check',
+  'stock_movements_quantity_sign_check',
 ] as const;
 
 const errorText = (error: unknown): string => {
@@ -263,6 +268,25 @@ const insufficientStock = (): AppError =>
 const insufficientReservation = (): AppError =>
   new AppError('Not enough reserved stock for this operation', 409, 'INSUFFICIENT_RESERVATION');
 
+/**
+ * A reservation held for an order is the order's own: the order's transitions
+ * reserve it on confirmation, release it on cancellation and issue it on
+ * fulfilment. A manual movement under the order's reference would promise or
+ * free units behind the order's back, so the stock API refuses it.
+ */
+const assertNotOrderReference = (
+  operation: 'reserve' | 'release' | 'issue',
+  input: { readonly referenceType?: string | undefined; readonly referenceId?: string | undefined },
+): void => {
+  if (input.referenceType !== ORDER_REFERENCE_TYPE) return;
+  throw new AppError(
+    'Stock held for an order is released and issued only by the order itself',
+    409,
+    'STOCK_ORDER_REFERENCE_FORBIDDEN',
+    { operation, referenceType: input.referenceType, referenceId: input.referenceId ?? null },
+  );
+};
+
 const stockConflict = (): AppError =>
   new AppError(
     'Stock level was modified by another request; retry the operation',
@@ -295,7 +319,10 @@ interface MovementPlan {
   readonly eventType: string;
   readonly warehouseId: string;
   readonly productId: string;
-  /** Always positive: the database rejects a movement of zero or fewer units. */
+  /**
+   * Positive for every movement except an adjustment, which keeps the sign of
+   * its delta: summing the ledger then reproduces the level it explains.
+   */
   readonly quantity: number;
   readonly onHandDelta: number;
   readonly reservedDelta: number;
@@ -338,24 +365,18 @@ const receivePlan = (input: ReceiveStockInput): MovementPlan => ({
   note: input.note,
 });
 
-const issuePlan = (input: IssueStockInput): MovementPlan => {
-  // An issue that consumes a reservation frees the reserved units in the same
-  // statement; without that the row would breach the database rule that
-  // reserved units can never exceed the units on hand.
-  const releasesReservation = input.fromReservation === true;
-  return {
-    type: 'ISSUE',
-    eventType: 'stock.issued',
-    warehouseId: input.warehouseId,
-    productId: input.productId,
-    quantity: input.quantity,
-    onHandDelta: -input.quantity,
-    reservedDelta: releasesReservation ? -input.quantity : 0,
-    referenceType: input.referenceType,
-    referenceId: input.referenceId,
-    note: input.note,
-  };
-};
+const issuePlan = (input: IssueStockInput): MovementPlan => ({
+  type: 'ISSUE',
+  eventType: 'stock.issued',
+  warehouseId: input.warehouseId,
+  productId: input.productId,
+  quantity: input.quantity,
+  onHandDelta: -input.quantity,
+  reservedDelta: 0,
+  referenceType: input.referenceType,
+  referenceId: input.referenceId,
+  note: input.note,
+});
 
 const reservePlan = (input: ReserveStockInput): MovementPlan => ({
   type: 'RESERVATION',
@@ -383,6 +404,32 @@ const releasePlan = (input: ReleaseStockInput): MovementPlan => ({
   note: input.note,
 });
 
+/**
+ * An issue that consumes a reservation is two movements: the reservation is
+ * released first, then the goods leave the shelf. Both are written, so summing
+ * the ledger reproduces the reserved counter as well as the on-hand one; an
+ * issue that freed reserved units silently would leave the ledger short of a
+ * release it never recorded.
+ */
+const issuePlans = (input: IssueStockInput): readonly MovementPlan[] =>
+  input.fromReservation === true
+    ? [
+        {
+          type: 'RELEASE',
+          eventType: 'stock.released',
+          warehouseId: input.warehouseId,
+          productId: input.productId,
+          quantity: input.quantity,
+          onHandDelta: 0,
+          reservedDelta: -input.quantity,
+          referenceType: input.referenceType,
+          referenceId: input.referenceId,
+          note: input.note,
+        },
+        issuePlan(input),
+      ]
+    : [issuePlan(input)];
+
 /** Rejects a correction that records nothing or explains nothing before any row is read. */
 const adjustPlan = (input: AdjustStockInput): MovementPlan => {
   if (input.delta === 0) {
@@ -397,7 +444,7 @@ const adjustPlan = (input: AdjustStockInput): MovementPlan => {
     eventType: 'stock.adjusted',
     warehouseId: input.warehouseId,
     productId: input.productId,
-    quantity: Math.abs(input.delta),
+    quantity: input.delta,
     onHandDelta: input.delta,
     reservedDelta: 0,
     referenceType: input.referenceType,
@@ -425,10 +472,52 @@ const assertWritableWarehouse = async (
   }
 };
 
+/**
+ * Finds the warehouse where this order line already holds a reservation, if
+ * any. The ledger is the record: whatever an order reserved and has not yet
+ * released or issued is still held. Only an order's reservation is looked
+ * up — other references carry no identity a repeat could be matched against.
+ */
+const findHeldOrderReservation = async (
+  transaction: WarehouseTransaction,
+  plan: MovementPlan,
+): Promise<string | null> => {
+  if (
+    plan.type !== 'RESERVATION' ||
+    plan.referenceType !== ORDER_REFERENCE_TYPE ||
+    plan.referenceId === undefined
+  ) {
+    return null;
+  }
+  const movements = await transaction.stockMovement.findMany({
+    where: {
+      productId: plan.productId,
+      referenceType: ORDER_REFERENCE_TYPE,
+      referenceId: plan.referenceId,
+      type: { in: ['RESERVATION', 'RELEASE', 'ISSUE'] },
+    },
+    select: { warehouseId: true, type: true, quantity: true },
+    orderBy: [{ warehouseId: 'asc' }],
+  });
+  const held = new Map<string, number>();
+  for (const movement of movements) {
+    const sign = movement.type === 'RESERVATION' ? 1 : -1;
+    held.set(
+      movement.warehouseId,
+      (held.get(movement.warehouseId) ?? 0) + sign * movement.quantity,
+    );
+  }
+  for (const [warehouseId, quantity] of held) {
+    if (quantity > 0) return warehouseId;
+  }
+  return null;
+};
+
 interface MovementOutcome {
   readonly before: StockLevelDto | null;
   readonly after: StockLevelDto;
-  readonly movement: StockMovementDto;
+  /** `null` when the request was a repeat that changed nothing. */
+  readonly movement: StockMovementDto | null;
 }
 
 /**
@@ -454,6 +543,20 @@ const applyMovementInTransaction = async (
   plan: MovementPlan,
 ): Promise<MovementOutcome> => {
   await assertWritableWarehouse(transaction, plan.warehouseId);
+
+  // Reserving an order line that is already reserved is a repeat, not a second
+  // promise: the level is reported as it stands and nothing is written.
+  const heldIn = await findHeldOrderReservation(transaction, plan);
+  if (heldIn !== null) {
+    const held = await transaction.stockLevel.findUnique({
+      where: { warehouseId_productId: { warehouseId: heldIn, productId: plan.productId } },
+      select: stockLevelSelection,
+    });
+    if (held) {
+      const level = toStockDto(held);
+      return { before: level, after: level, movement: null };
+    }
+  }
 
   const existing = await transaction.stockLevel.findUnique({
     where: {
@@ -565,6 +668,50 @@ const movementEvent = (
   payload: { before: outcome.before, after: outcome.after, movement: outcome.movement },
 });
 
+interface PlannedOutcome {
+  readonly plan: MovementPlan;
+  readonly outcome: MovementOutcome;
+}
+
+/**
+ * Applies the plans one after another on the supplied transaction. Several
+ * plans describe one request that the ledger records as several movements; a
+ * failing step rolls back the steps before it together with the transaction.
+ */
+const applyPlansInTransaction = async (
+  transaction: WarehouseTransaction,
+  audit: AuditService,
+  access: WarehouseAccess,
+  plans: readonly MovementPlan[],
+): Promise<readonly PlannedOutcome[]> => {
+  const outcomes: PlannedOutcome[] = [];
+  for (const plan of plans) {
+    outcomes.push({
+      plan,
+      outcome: await applyMovementInTransaction(transaction, audit, access, plan),
+    });
+  }
+  return outcomes;
+};
+
+/** A repeat that wrote nothing announces nothing. */
+const announceOutcomes = (
+  announce: (event: DomainEventNotification) => void,
+  access: WarehouseAccess,
+  outcomes: readonly PlannedOutcome[],
+): void => {
+  for (const { plan, outcome } of outcomes) {
+    if (outcome.movement !== null) announce(movementEvent(access, plan, outcome));
+  }
+};
+
+const lastOutcome = (outcomes: readonly PlannedOutcome[]): MovementOutcome => {
+  const last = outcomes.at(-1);
+  /* c8 ignore next */
+  if (!last) throw new Error('A stock request always produces at least one movement plan');
+  return last.outcome;
+};
+
 /**
  * Builds the transaction-scoped stock port. It holds no database handle at all:
  * every operation runs on the transaction its caller passes in, and the caller
@@ -580,33 +727,34 @@ export const createStockOperationsInTransaction = (
   const apply = async (
     transaction: WarehouseTransaction,
     access: WarehouseAccess,
-    plan: MovementPlan,
+    plans: readonly MovementPlan[],
   ): Promise<StockChangeInTransaction> => {
-    const outcome = await applyMovementInTransaction(transaction, audit, access, plan);
+    const outcomes = await applyPlansInTransaction(transaction, audit, access, plans);
+    const last = lastOutcome(outcomes);
     return {
-      level: outcome.after,
-      movement: outcome.movement,
+      level: last.after,
+      movement: last.movement,
       publishCommitted: () => {
-        announce(movementEvent(access, plan, outcome));
+        announceOutcomes(announce, access, outcomes);
       },
     };
   };
 
   return {
     async receive(transaction, access, input) {
-      return apply(transaction, access, receivePlan(input));
+      return apply(transaction, access, [receivePlan(input)]);
     },
     async issue(transaction, access, input) {
-      return apply(transaction, access, issuePlan(input));
+      return apply(transaction, access, issuePlans(input));
     },
     async reserve(transaction, access, input) {
-      return apply(transaction, access, reservePlan(input));
+      return apply(transaction, access, [reservePlan(input)]);
     },
     async release(transaction, access, input) {
-      return apply(transaction, access, releasePlan(input));
+      return apply(transaction, access, [releasePlan(input)]);
     },
     async adjust(transaction, access, input) {
-      return apply(transaction, access, adjustPlan(input));
+      return apply(transaction, access, [adjustPlan(input)]);
     },
   };
 };
@@ -642,17 +790,17 @@ export const createWarehouseService = (
    */
   const applyMovement = async (
     access: WarehouseAccess,
-    plan: MovementPlan,
+    plans: readonly MovementPlan[],
   ): Promise<MovementOutcome> => {
-    const result = await db.$transaction(async (transaction) =>
-      applyMovementInTransaction(transaction, audit, access, plan),
+    const outcomes = await db.$transaction(async (transaction) =>
+      applyPlansInTransaction(transaction, audit, access, plans),
     );
 
     // Only reached once the transaction has committed: a failed transaction
     // throws above and publishes nothing.
-    announce(movementEvent(access, plan, result));
+    announceOutcomes(announce, access, outcomes);
 
-    return result;
+    return lastOutcome(outcomes);
   };
 
   return {
@@ -802,29 +950,32 @@ export const createWarehouseService = (
     },
 
     async receive(access, input) {
-      const { after } = await applyMovement(access, receivePlan(input));
+      const { after } = await applyMovement(access, [receivePlan(input)]);
       return after;
     },
 
     async issue(access, input) {
-      const { after } = await applyMovement(access, issuePlan(input));
+      assertNotOrderReference('issue', input);
+      const { after } = await applyMovement(access, issuePlans(input));
       return after;
     },
 
     async reserve(access, input) {
-      const { after } = await applyMovement(access, reservePlan(input));
+      assertNotOrderReference('reserve', input);
+      const { after } = await applyMovement(access, [reservePlan(input)]);
       return after;
     },
 
     async release(access, input) {
-      const { after } = await applyMovement(access, releasePlan(input));
+      assertNotOrderReference('release', input);
+      const { after } = await applyMovement(access, [releasePlan(input)]);
       return after;
     },
 
     async adjust(access, input) {
       // The plan builder rejects a zero delta or a blank note before the
       // transaction is opened, exactly as this method always has.
-      const { after } = await applyMovement(access, adjustPlan(input));
+      const { after } = await applyMovement(access, [adjustPlan(input)]);
       return after;
     },
   };

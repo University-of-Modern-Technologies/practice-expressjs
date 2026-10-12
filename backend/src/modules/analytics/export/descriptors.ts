@@ -1,3 +1,4 @@
+import { describeValidationIssues } from '../../../common/errors/index.js';
 import type { z } from 'zod';
 
 import type { AnalyticsService } from '../service.js';
@@ -67,7 +68,7 @@ const defineDescriptor = <Query, Report, Row>(
   rowSchema: config.rowSchema,
   loadRows: async (service, rawQuery) => {
     const parsed = config.schema.safeParse({ query: rawQuery });
-    if (!parsed.success) return { ok: false, details: parsed.error.flatten() };
+    if (!parsed.success) return { ok: false, details: describeValidationIssues(parsed.error) };
     const report = await config.run(service, parsed.data.query);
     return { ok: true, rows: config.rows(report) };
   },

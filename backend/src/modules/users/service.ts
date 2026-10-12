@@ -4,6 +4,11 @@ import { AppError } from '../../common/errors/app-error.js';
 import { createListReader, type ListReaderModel } from '../../common/query/list-reader.js';
 import { createAuditService, type AuditService } from '../audit/service.js';
 import {
+  noopSessionRevocationListener,
+  notifySessionsRevoked,
+  type SessionRevocationListener,
+} from '../auth/types.js';
+import {
   noopUserPermissionsInvalidator,
   type UserPermissionsInvalidator,
 } from '../rbac/service.js';
@@ -236,6 +241,9 @@ export const createUsersService = (
   // Every change is written to the trail inside its own transaction, so the
   // change and its entry commit, or roll back, as one.
   audit: AuditRecorder = createAuditService(db),
+  // Told about sessions a change ended, once it has committed, so a socket
+  // opened with one of them is closed now rather than when its token runs out.
+  sessions: SessionRevocationListener = noopSessionRevocationListener,
 ): UsersService => {
   // Prisma's generic `findMany` overload can't be structurally verified against
   // a plain interface once the select includes a nested relation (`userRoles`),
@@ -280,7 +288,7 @@ export const createUsersService = (
     },
 
     async revokeSession(actor, userId, sessionId) {
-      await db.$transaction(async (transaction: UsersTransaction) => {
+      const revokedId = await db.$transaction(async (transaction: UsersTransaction) => {
         const user = await transaction.user.findUnique({
           where: { id: userId },
           select: { id: true },
@@ -294,13 +302,13 @@ export const createUsersService = (
         if (!session) throw new AppError('Session not found', 404, 'SESSION_NOT_FOUND');
         // Revoking an already revoked session succeeds: the caller asked for a
         // state, and that state holds. Nothing changed, so nothing is audited.
-        if (session.revokedAt) return;
+        if (session.revokedAt) return null;
 
         const { count } = await transaction.session.updateMany({
           where: { id: session.id, userId: session.userId, revokedAt: null },
           data: { revokedAt: new Date() },
         });
-        if (count === 0) return;
+        if (count === 0) return null;
 
         const revoked = await transaction.session.findUniqueOrThrow({
           where: { id: session.id },
@@ -315,7 +323,9 @@ export const createUsersService = (
           metadata: { userId: session.userId },
           ipAddress: actor.ipAddress,
         });
+        return session.id;
       });
+      if (revokedId !== null) notifySessionsRevoked(sessions, { sessionIds: [revokedId] });
     },
 
     async create(actor, data) {
@@ -397,6 +407,7 @@ export const createUsersService = (
           return after;
         });
         await permissions.invalidateUserPermissions(updated.id);
+        if (passwordHash) notifySessionsRevoked(sessions, { userId: updated.id });
         return updated;
       } catch (error) {
         return mapPersistenceError(error);
@@ -439,6 +450,7 @@ export const createUsersService = (
           return after;
         });
         await permissions.invalidateUserPermissions(disabled.id);
+        notifySessionsRevoked(sessions, { userId: disabled.id });
         return disabled;
       } catch (error) {
         return mapPersistenceError(error);

@@ -1,10 +1,11 @@
 import { z } from 'zod';
 
+import { MAX_REPORT_WINDOW_DAYS } from '../../common/reporting/index.js';
 import {
-  DEFAULT_REPORT_WINDOW_FROM,
-  MAX_REPORT_WINDOW_DAYS,
-  defaultReportWindowTo,
-} from '../../common/reporting/index.js';
+  DEFAULT_KYIV_WINDOW_FROM,
+  defaultKyivWindowTo,
+  kyivWallClockToInstant,
+} from './kyiv-time.js';
 import { analyticsPeriods, type DateRange } from './types.js';
 
 const DAY_MS = 86_400_000;
@@ -12,10 +13,11 @@ const DAY_MS = 86_400_000;
 /** Widest window a single report may scan. See `common/reporting`. */
 export const MAX_RANGE_DAYS = MAX_REPORT_WINDOW_DAYS;
 /**
- * Start of the window applied when the caller does not name one; the end is
- * today. See `common/reporting`.
+ * Start of the window applied when the caller does not name one — Kyiv
+ * midnight of 1 January 2026; the end is the close of today in Kyiv. See
+ * `kyiv-time.ts`.
  */
-export const DEFAULT_RANGE_FROM = DEFAULT_REPORT_WINDOW_FROM;
+export const DEFAULT_RANGE_FROM = DEFAULT_KYIV_WINDOW_FROM;
 /** Hard ceiling for every `limit`; larger values are clamped, not rejected. */
 export const MAX_LIMIT = 100;
 export const DEFAULT_LIMIT = 10;
@@ -39,9 +41,12 @@ const LATEST_YEAR = 9999;
 /**
  * Reads a bound as an instant, or returns null when it is not one.
  *
- * A value without a zone is UTC — not the zone of whichever machine this
- * process runs on, which is what `Date.parse` would make of a date-time.
- * The calendar is checked rather than trusted: `2026-02-31` is refused instead
+ * A value without a zone is read on the Kyiv clock, the calendar every report
+ * is cut on: `2026-03-01` is the instant that day begins in Kyiv, and
+ * `2026-03-01T10:00` is ten in the morning there — not in UTC, and not in the
+ * zone of whichever machine this process runs on, which is what `Date.parse`
+ * would make of it. An explicit `Z` or offset is taken as written. The
+ * calendar is checked rather than trusted: `2026-02-31` is refused instead
  * of rolling over into March. Anything finer than a millisecond is truncated,
  * because that is the resolution the data is stored at.
  */
@@ -69,7 +74,9 @@ export const parseIsoInstant = (value: string): string | null => {
     zone === undefined || zone === 'Z'
       ? 0
       : (zone.startsWith('-') ? -1 : 1) * (Number(zone.slice(1, 3)) * 60 + Number(zone.slice(4)));
-  const instant = new Date(wallClock - offsetMinutes * MINUTE_MS);
+  const instant = new Date(
+    zone === undefined ? kyivWallClockToInstant(wallClock) : wallClock - offsetMinutes * MINUTE_MS,
+  );
   const utcYear = instant.getUTCFullYear();
   if (utcYear < EARLIEST_YEAR || utcYear > LATEST_YEAR) return null;
   return instant.toISOString();
@@ -91,7 +98,10 @@ const isoInstant = z
     }
     return instant;
   })
-  .meta({ description: 'Дата або мітка часу ISO 8601; нормалізується до UTC.' });
+  .meta({
+    description:
+      'Дата або мітка часу ISO 8601; без зони читається за київським часом, нормалізується до UTC.',
+  });
 
 interface RangeInput {
   readonly from?: string | undefined;
@@ -99,12 +109,12 @@ interface RangeInput {
 }
 
 // Each bound defaults on its own, so a caller may send neither, either, or
-// both. The start is fixed and the end is the close of today, so a report asked
-// for without a window includes what was entered today.
+// both. The start is fixed and the end is the close of today in Kyiv, so a
+// report asked for without a window includes what was entered today.
 const applyRangeDefaults = <T extends RangeInput>(value: T): T & DateRange => ({
   ...value,
   from: value.from ?? DEFAULT_RANGE_FROM,
-  to: value.to ?? defaultReportWindowTo(),
+  to: value.to ?? defaultKyivWindowTo(),
 });
 
 const rangeIsOrdered = (value: DateRange): boolean => Date.parse(value.from) < Date.parse(value.to);

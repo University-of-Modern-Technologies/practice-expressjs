@@ -1,10 +1,8 @@
+import { MAX_PAGE } from '../../common/query/pagination.js';
 import { z } from 'zod';
 
-import {
-  DEFAULT_REPORT_WINDOW_FROM,
-  MAX_REPORT_WINDOW_DAYS,
-  defaultReportWindowTo,
-} from '../../common/reporting/index.js';
+import { MAX_REPORT_WINDOW_DAYS } from '../../common/reporting/index.js';
+import { DEFAULT_KYIV_WINDOW_FROM, defaultKyivWindowTo } from '../analytics/kyiv-time.js';
 import { parseIsoInstant } from '../analytics/validation.js';
 import {
   paymentMatchStatuses,
@@ -34,7 +32,8 @@ const DAY_MS = 86_400_000;
 
 /**
  * An instant, read by the same rule as every report bound in this API: ISO
- * 8601, a missing zone meaning UTC, and nothing `Date.parse` would guess at.
+ * 8601, a missing zone meaning the Kyiv clock — so `2026-03-01` is the start
+ * of that day in Kyiv — and nothing `Date.parse` would guess at.
  * The output is a UTC string, so a second parse of it is a no-op.
  */
 const readInstant = (value: string, context: z.RefinementCtx): string => {
@@ -61,7 +60,7 @@ const bookedTo = z.string().transform(readInstant).meta({
 
 export const listStatementsSchema = z.object({
   query: z.object({
-    page: z.coerce.number().int().min(1).default(1),
+    page: z.coerce.number().int().min(1).max(MAX_PAGE).default(1),
     pageSize: z.coerce.number().int().min(1).max(100).default(20),
     search: z.string().trim().min(1).max(160).optional(),
     sortBy: z.enum(statementSortFields).default('periodStart'),
@@ -79,7 +78,7 @@ export const importStatementSchema = z.object({ body: z.object({}).optional() })
 export const listTransactionsSchema = z.object({
   query: z
     .object({
-      page: z.coerce.number().int().min(1).default(1),
+      page: z.coerce.number().int().min(1).max(MAX_PAGE).default(1),
       pageSize: z.coerce.number().int().min(1).max(100).default(20),
       search: z.string().trim().min(1).max(160).optional(),
       statementId: z.string().uuid().optional(),
@@ -135,7 +134,7 @@ export const reconcileSchema = z.object({ body: z.object({}).optional() });
 /**
  * Each bound is optional on the wire and defaults on its own, from the shared
  * reporting window rather than from the clock: a fixed start, and the end of
- * today.
+ * today — both on the Kyiv calendar, as every report is cut.
  *
  * The defaults are applied *before* the two checks, exactly as the analytics
  * reports do it. Checking only a window the caller named in full let a single
@@ -148,8 +147,8 @@ export const financeSummarySchema = z.object({
     .object({ from: isoInstant.optional(), to: isoInstant.optional() })
     .transform((value) => ({
       ...value,
-      from: value.from ?? DEFAULT_REPORT_WINDOW_FROM,
-      to: value.to ?? defaultReportWindowTo(),
+      from: value.from ?? DEFAULT_KYIV_WINDOW_FROM,
+      to: value.to ?? defaultKyivWindowTo(),
     }))
     .refine((value) => Date.parse(value.from) < Date.parse(value.to), {
       message: 'from must be earlier than to',

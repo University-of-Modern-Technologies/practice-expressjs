@@ -1,6 +1,6 @@
 import type { Request, RequestHandler } from 'express';
 
-import { AppError, validationError } from '../../common/errors/index.js';
+import { AppError, describeValidationIssues, validationError } from '../../common/errors/index.js';
 import type { AuthContext } from '../../common/types/auth-context.js';
 import type { RbacService } from '../rbac/service.js';
 import type { AiService } from './service.js';
@@ -31,7 +31,7 @@ export const createAiController = (service: AiService, rbac: RbacService): AiCon
     // Parsing strips every field that is not on the allow-list, so nothing the
     // caller invents can travel further into the prompt.
     const parsed = summariseDealSchema.safeParse({ body: request.body });
-    if (!parsed.success) throw validationError(parsed.error.flatten());
+    if (!parsed.success) throw validationError(describeValidationIssues(parsed.error));
     const auth = getAuth(request);
     await assertPermission(rbac, auth.userId);
     response.json({ data: await service.summariseDeal(parsed.data.body) });
@@ -39,7 +39,7 @@ export const createAiController = (service: AiService, rbac: RbacService): AiCon
 
   classifyInquiry: async (request, response) => {
     const parsed = classifyInquirySchema.safeParse({ body: request.body });
-    if (!parsed.success) throw validationError(parsed.error.flatten());
+    if (!parsed.success) throw validationError(describeValidationIssues(parsed.error));
     const auth = getAuth(request);
     await assertPermission(rbac, auth.userId);
     response.json({ data: await service.classifyInquiry(parsed.data.body) });

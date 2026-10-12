@@ -45,14 +45,6 @@ export interface UpdateContactData {
   readonly notes?: string | null | undefined;
 }
 
-/**
- * Highest page a list request may ask for. Far beyond any real directory, and
- * low enough that the row offset it implies stays a small integer for the
- * database — an unbounded page number is otherwise a way to make the query
- * itself fail.
- */
-export const MAX_CONTACT_PAGE = 1_000_000;
-
 export const contactSortFields = [
   'createdAt',
   'updatedAt',

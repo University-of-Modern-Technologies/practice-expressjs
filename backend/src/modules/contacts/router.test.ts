@@ -67,8 +67,8 @@ describe('contacts validation', () => {
   });
 
   it('puts an upper bound on the page number', () => {
-    expect(listContactsSchema.safeParse({ query: { page: '1000000' } }).success).toBe(true);
-    expect(listContactsSchema.safeParse({ query: { page: '1000001' } }).success).toBe(false);
+    expect(listContactsSchema.safeParse({ query: { page: '100' } }).success).toBe(true);
+    expect(listContactsSchema.safeParse({ query: { page: '101' } }).success).toBe(false);
     expect(listContactsSchema.safeParse({ query: { page: '1e20' } }).success).toBe(false);
   });
 

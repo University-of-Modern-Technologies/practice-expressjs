@@ -1,3 +1,4 @@
+import { MAX_PAGE } from '../common/query/pagination.js';
 import { z } from 'zod';
 
 const identifier = z.string().trim().min(1).max(128);
@@ -17,7 +18,7 @@ export const domainEventSchema = z.object({
 export type DomainEventSchemaOutput = z.infer<typeof domainEventSchema>;
 
 const pagination = {
-  page: z.coerce.number().int().min(1).default(1),
+  page: z.coerce.number().int().min(1).max(MAX_PAGE).default(1),
   pageSize: z.coerce.number().int().min(1).max(100).default(25),
 };
 

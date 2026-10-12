@@ -321,6 +321,27 @@ describe('calls service import', () => {
       expect.objectContaining({ eventType: 'call.created', entityType: 'call' }),
     );
   });
+
+  it('announces a committed call even when a later record of the batch fails', async () => {
+    const harness = createHarness();
+    const insert = harness.createCall.getMockImplementation()!;
+    let inserts = 0;
+    harness.createCall.mockImplementation(async (args: unknown) => {
+      inserts += 1;
+      // A check constraint is not a duplicate: it must surface, not be skipped.
+      if (inserts === 2) throw { code: 'P2004', message: 'violates check constraint' };
+      return insert(args);
+    });
+
+    await expect(harness.service.sync(wideAccess)).rejects.toMatchObject({ code: 'P2004' });
+
+    // The first record had its own transaction and is on file, so its event
+    // went out with it instead of being lost with the rest of the loop.
+    expect(harness.publish).toHaveBeenCalledTimes(1);
+    expect(harness.publish).toHaveBeenCalledWith(
+      expect.objectContaining({ eventType: 'call.created', entityId: 'call-1' }),
+    );
+  });
 });
 
 describe('calls service correctness', () => {

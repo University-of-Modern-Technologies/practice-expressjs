@@ -2,6 +2,7 @@ import { createNoopCacheService, type CacheService } from '../../cache/cache.ser
 import { Prisma, type PrismaDatabase } from '../../db/prisma.js';
 import { dealStages, type DealStage } from '../deals/types.js';
 import { analyticsReportKey } from './cache-keys.js';
+import { REPORT_TIME_ZONE } from './kyiv-time.js';
 import {
   averageDecimal,
   compareDecimals,
@@ -148,18 +149,20 @@ export const createAnalyticsService = (
           ? Prisma.sql`AND o.owner_id = ${query.ownerId}::uuid`
           : Prisma.empty;
 
-        // Buckets are cut on the UTC calendar, named explicitly. Truncating a
+        // Buckets are cut on the Kyiv calendar, named explicitly. Truncating a
         // timestamptz on its own uses the session's time zone, so the same
         // orders would fall into different days depending on how the
-        // connection happened to be configured. Converting to UTC wall time,
-        // truncating, and converting back pins every bucket to a UTC midnight.
+        // connection happened to be configured. Converting to Kyiv wall time,
+        // truncating, and converting back pins every bucket to a Kyiv
+        // midnight, summer time included — an order at half past midnight in
+        // Kyiv belongs to the day the person who placed it saw on the clock.
         //
         // The first bucket starts where its calendar unit starts, which may
         // be before `from` (a week asked for from a Wednesday starts on the
         // Monday). Its figures still cover only the window: the bounds below
         // filter the orders, the truncation only labels them.
         const rows = await db.$queryRaw<SalesSummaryRow[]>(Prisma.sql`
-          SELECT date_trunc(${query.period}::text, COALESCE(o.placed_at, o.created_at) AT TIME ZONE 'UTC') AT TIME ZONE 'UTC' AS bucket_start,
+          SELECT date_trunc(${query.period}::text, COALESCE(o.placed_at, o.created_at) AT TIME ZONE ${REPORT_TIME_ZONE}::text) AT TIME ZONE ${REPORT_TIME_ZONE}::text AS bucket_start,
                  COUNT(*)::int AS order_count,
                  COALESCE(SUM(o.total), 0)::text AS revenue
           FROM orders o

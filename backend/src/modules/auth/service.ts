@@ -3,12 +3,16 @@ import type { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcryptjs';
 import jwt, { type JwtPayload } from 'jsonwebtoken';
 import { AppError } from '../../common/errors/app-error.js';
-import type {
-  AuthConfig,
-  AuthResult,
-  AuthenticatedUser,
-  AuthTokens,
-  PermissionGrant,
+import {
+  noopSessionRevocationListener,
+  notifySessionsRevoked,
+  type AuthConfig,
+  type AuthResult,
+  type AuthenticatedUser,
+  type AuthTokens,
+  type PermissionGrant,
+  type SessionRevocationListener,
+  type VerifiedAccess,
 } from './types.js';
 import { parsePermissionKey } from '../rbac/types.js';
 import type { SessionClient } from './client.js';
@@ -34,7 +38,7 @@ export interface AuthService {
   login(input: LoginInput, client?: SessionClient): Promise<AuthResult>;
   refresh(refreshToken: string, client?: SessionClient): Promise<AuthResult>;
   logout(refreshToken?: string): Promise<void>;
-  authenticate(accessToken: string): Promise<{ userId: string; sessionId: string }>;
+  authenticate(accessToken: string): Promise<VerifiedAccess>;
   me(userId: string): Promise<AuthenticatedUser>;
 }
 
@@ -112,10 +116,7 @@ export const splitRefreshToken = (token: string): { sessionId: string; secret: s
 };
 
 /** The claims an access token must carry, or `null` when it carries anything else. */
-const verifyAccessClaims = (
-  accessToken: string,
-  secret: string,
-): { userId: string; sessionId: string } | null => {
+const verifyAccessClaims = (accessToken: string, secret: string): VerifiedAccess | null => {
   let payload: string | JwtPayload;
   try {
     payload = jwt.verify(accessToken, secret);
@@ -127,18 +128,30 @@ const verifyAccessClaims = (
     payload.type !== 'access' ||
     typeof payload.sub !== 'string' ||
     typeof payload.sessionId !== 'string' ||
+    // A token without a lifetime would be valid forever; none is ever issued.
+    typeof payload.exp !== 'number' ||
     !UUID_PATTERN.test(payload.sub) ||
     !UUID_PATTERN.test(payload.sessionId)
   ) {
     return null;
   }
-  return { userId: payload.sub, sessionId: payload.sessionId };
+  return {
+    userId: payload.sub,
+    sessionId: payload.sessionId,
+    expiresAt: new Date(payload.exp * 1000),
+  };
 };
 
 const clientColumns = (client: SessionClient | undefined) =>
   client ? { ipAddress: client.ipAddress, userAgent: client.userAgent } : {};
 
-export const createAuthService = (db: AuthDatabase, config: AuthConfig): AuthService => {
+export const createAuthService = (
+  db: AuthDatabase,
+  config: AuthConfig,
+  // Told about a session a logout ended, so a socket opened with it is closed
+  // now rather than when its access token runs out.
+  sessions: SessionRevocationListener = noopSessionRevocationListener,
+): AuthService => {
   const issueAccessToken = (userId: string, sessionId: string): string =>
     jwt.sign({ type: 'access', sessionId }, config.accessTokenSecret, {
       subject: userId,
@@ -231,16 +244,39 @@ export const createAuthService = (db: AuthDatabase, config: AuthConfig): AuthSer
     },
 
     async logout(refreshToken) {
+      // Only the holder of the whole refresh token may end its session: the
+      // session id alone is not a secret. Every refusal looks the same as a
+      // logout without a cookie, so the answer never says whether the session
+      // exists.
       if (!refreshToken) return;
+      let parts: { sessionId: string; secret: string };
       try {
-        const { sessionId } = splitRefreshToken(refreshToken);
-        await db.session.updateMany({
-          where: { id: sessionId, revokedAt: null },
-          data: { revokedAt: new Date() },
-        });
+        parts = splitRefreshToken(refreshToken);
       } catch (error) {
-        if (!(error instanceof AppError)) throw error;
+        if (error instanceof AppError) return;
+        throw error;
       }
+
+      const session = await db.session.findUnique({
+        where: { id: parts.sessionId },
+        select: { id: true, tokenHash: true, revokedAt: true },
+      });
+      // The secret is checked in every case, against a throwaway digest when
+      // there is no row, so a missing session costs the same time as a wrong
+      // secret.
+      const secretMatches = await bcrypt.compare(
+        parts.secret,
+        session?.tokenHash ?? DUMMY_PASSWORD_HASH,
+      );
+      if (!session || !secretMatches || session.revokedAt) return;
+
+      // Conditional on the digest just checked: a refresh that rotated the
+      // secret in the meantime leaves this, now stale, token without effect.
+      const { count } = await db.session.updateMany({
+        where: { id: session.id, tokenHash: session.tokenHash, revokedAt: null },
+        data: { revokedAt: new Date() },
+      });
+      if (count === 1) notifySessionsRevoked(sessions, { sessionIds: [session.id] });
     },
 
     async authenticate(accessToken) {

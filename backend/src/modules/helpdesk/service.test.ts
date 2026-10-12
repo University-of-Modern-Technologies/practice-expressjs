@@ -541,3 +541,37 @@ describe('helpdesk owners, numbers and search', () => {
     expect(args.where.OR[0]?.subject.contains).toBe('100\\%');
   });
 });
+
+describe('closed tickets', () => {
+  const closedTicket: TicketRow = { ...resolvedTicket, status: 'CLOSED' };
+
+  it('refuses to edit the fields of a closed ticket and writes nothing', async () => {
+    const harness = createHarness({ existing: closedTicket });
+
+    await expect(
+      harness.service.update(wideAccess, closedTicket.id, {
+        version: closedTicket.version,
+        subject: 'Rewritten afterwards',
+      }),
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      code: 'TICKET_CLOSED',
+      details: { status: 'CLOSED' },
+    });
+    expect(harness.updateTicket).not.toHaveBeenCalled();
+    expect(harness.record).not.toHaveBeenCalled();
+    expect(harness.publish).not.toHaveBeenCalled();
+  });
+
+  it('still edits a resolved ticket, which may yet be reopened', async () => {
+    const harness = createHarness({ existing: resolvedTicket });
+
+    await expect(
+      harness.service.update(wideAccess, resolvedTicket.id, {
+        version: resolvedTicket.version,
+        priority: 'LOW',
+      }),
+    ).resolves.toBeDefined();
+    expect(harness.updateTicket).toHaveBeenCalledTimes(1);
+  });
+});

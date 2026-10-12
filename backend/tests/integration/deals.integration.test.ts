@@ -62,7 +62,7 @@ describe('database-backed deals, transitions, and RBAC flow', () => {
       probability: 10,
     });
     expect(Number(createResponse.body.data.amount)).toBe(1500);
-    expect(createResponse.body.data.expectedCloseDate).toBe('2026-12-31T00:00:00.000Z');
+    expect(createResponse.body.data.expectedCloseDate).toBe('2026-12-31');
 
     const dealId = createResponse.body.data.id as string;
     const createdVersion = createResponse.body.data.version as number;

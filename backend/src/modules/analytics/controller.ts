@@ -1,7 +1,7 @@
 import type { RequestHandler } from 'express';
 import { z } from 'zod';
 
-import { validationError } from '../../common/errors/index.js';
+import { describeValidationIssues, validationError } from '../../common/errors/index.js';
 import { renderCsv } from './export/csv.js';
 import { analyticsExportDescriptors } from './export/descriptors.js';
 import { exportFormats } from './export/types.js';
@@ -33,31 +33,31 @@ export const exportFormatSchema = z.enum(exportFormats).default('csv');
 export const createAnalyticsController = (service: AnalyticsService): AnalyticsController => ({
   salesSummary: async (request, response) => {
     const parsed = salesSummarySchema.safeParse({ query: request.query });
-    if (!parsed.success) throw validationError(parsed.error.flatten());
+    if (!parsed.success) throw validationError(describeValidationIssues(parsed.error));
     response.json({ data: await service.salesSummary(parsed.data.query) });
   },
 
   dealFunnel: async (request, response) => {
     const parsed = dealFunnelSchema.safeParse({ query: request.query });
-    if (!parsed.success) throw validationError(parsed.error.flatten());
+    if (!parsed.success) throw validationError(describeValidationIssues(parsed.error));
     response.json({ data: await service.dealFunnel(parsed.data.query) });
   },
 
   topProducts: async (request, response) => {
     const parsed = topProductsSchema.safeParse({ query: request.query });
-    if (!parsed.success) throw validationError(parsed.error.flatten());
+    if (!parsed.success) throw validationError(describeValidationIssues(parsed.error));
     response.json({ data: await service.topProducts(parsed.data.query) });
   },
 
   ownerPerformance: async (request, response) => {
     const parsed = ownerPerformanceSchema.safeParse({ query: request.query });
-    if (!parsed.success) throw validationError(parsed.error.flatten());
+    if (!parsed.success) throw validationError(describeValidationIssues(parsed.error));
     response.json({ data: await service.ownerPerformance(parsed.data.query) });
   },
 
   stockHealth: async (request, response) => {
     const parsed = stockHealthSchema.safeParse({ query: request.query });
-    if (!parsed.success) throw validationError(parsed.error.flatten());
+    if (!parsed.success) throw validationError(describeValidationIssues(parsed.error));
     response.json({ data: await service.stockHealth(parsed.data.query) });
   },
 
@@ -72,7 +72,7 @@ export const createAnalyticsController = (service: AnalyticsService): AnalyticsC
     }
 
     const formatParsed = exportFormatSchema.safeParse(request.query.format);
-    if (!formatParsed.success) throw validationError(formatParsed.error.flatten());
+    if (!formatParsed.success) throw validationError(describeValidationIssues(formatParsed.error));
 
     const outcome = await descriptor.loadRows(service, request.query);
     if (!outcome.ok) throw validationError(outcome.details);

@@ -12,6 +12,10 @@ const upstreamErrorNote =
   'Помилки зовнішньої служби: 422 `DELIVERY_REJECTED`, 502 `DELIVERY_INVALID_RESPONSE`, ' +
   '503 `DELIVERY_UNAVAILABLE` (зокрема коли розімкнено запобіжник), 504 `DELIVERY_TIMEOUT`.';
 
+const orderNote =
+  'Замовлення має існувати, бути видимим за обсягом дозволу `orders:read` і перебувати ' +
+  'у статусі CONFIRMED або PAID: інакше 404 `ORDER_NOT_FOUND` або 409 `ORDER_NOT_SHIPPABLE`.';
+
 export const createIntegrationsRouter = (
   controller: IntegrationsController,
   authenticate: RequestHandler,
@@ -51,10 +55,10 @@ export const createIntegrationsRouter = (
     {
       tags: ['Delivery'],
       summary: 'Запитати вартість доставки',
-      description: `Потребує дозволу \`integrations:read\`. Результат кешується. ${upstreamErrorNote}`,
+      description: `Потребує дозволу \`integrations:read\`. ${orderNote} Результат кешується. ${upstreamErrorNote}`,
       response: ok('Пропозиція доставки', deliveryQuoteSchema),
       // Every call to the carrier can fail in one of four documented ways.
-      refusals: refusals(401, 403, 422, 502, 503, 504),
+      refusals: refusals(401, 403, 404, 409, 422, 502, 503, 504),
     },
     allowed('read'),
     validate(createQuoteSchema),
@@ -65,9 +69,9 @@ export const createIntegrationsRouter = (
     {
       tags: ['Delivery'],
       summary: 'Створити відправлення',
-      description: `Потребує дозволу \`integrations:write\`. Не кешується. ${upstreamErrorNote}`,
+      description: `Потребує дозволу \`integrations:write\`. ${orderNote} Не кешується. ${upstreamErrorNote}`,
       response: created('Відправлення створено', shipmentSchema),
-      refusals: refusals(401, 403, 422, 502, 503, 504),
+      refusals: refusals(401, 403, 404, 409, 422, 502, 503, 504),
     },
     allowed('write'),
     validate(createShipmentSchema),

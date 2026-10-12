@@ -1,7 +1,6 @@
 import { describe, expect, it } from '@jest/globals';
 
-import { defaultReportWindowTo } from '../../common/reporting/index.js';
-
+import { defaultKyivWindowTo } from './kyiv-time.js';
 import {
   DEFAULT_RANGE_FROM,
   MAX_LIMIT,
@@ -23,23 +22,24 @@ describe('analytics query validation', () => {
   it('defaults the range to a fixed start and the end of today', () => {
     const parsed = salesSummarySchema.parse({ query: {} });
     expect(parsed.query.from).toBe(DEFAULT_RANGE_FROM);
-    expect(parsed.query.to).toBe(defaultReportWindowTo());
+    expect(parsed.query.to).toBe(defaultKyivWindowTo());
     expect(Date.parse(parsed.query.to)).toBeGreaterThan(Date.now());
     expect(parsed.query.period).toBe('day');
   });
 
   it('fills only the bound the caller left out', () => {
     const parsed = salesSummarySchema.parse({ query: { from: '2026-01-01' } });
-    expect(parsed.query.from).toBe('2026-01-01T00:00:00.000Z');
-    expect(parsed.query.to).toBe(defaultReportWindowTo());
+    expect(parsed.query.from).toBe('2025-12-31T22:00:00.000Z');
+    expect(parsed.query.to).toBe(defaultKyivWindowTo());
   });
 
   it('normalises dates to ISO 8601 and stays idempotent on a second parse', () => {
     const first = salesSummarySchema.parse({
       query: { from: '2026-01-01', to: '2026-02-01', period: 'week' },
     });
-    expect(first.query.from).toBe('2026-01-01T00:00:00.000Z');
-    expect(first.query.to).toBe('2026-02-01T00:00:00.000Z');
+    // A bare date is the day as Kyiv lives it: its midnight, in UTC.
+    expect(first.query.from).toBe('2025-12-31T22:00:00.000Z');
+    expect(first.query.to).toBe('2026-01-31T22:00:00.000Z');
 
     // The router validates a request and the controller validates it again.
     const second = salesSummarySchema.parse(first);
@@ -111,13 +111,47 @@ describe('analytics query validation', () => {
 });
 
 describe('analytics date bounds', () => {
-  // A missing zone is UTC, not the zone of the server.
-  it('reads a date-time without a zone as UTC', () => {
+  // A missing zone is not the zone of the server. Since the day
+  // boundaries moved to Kyiv it is Kyiv's clock, so a bare date and the same
+  // date at midnight name one instant.
+  it('reads a date-time without a zone on the Kyiv clock', () => {
     const parsed = salesSummarySchema.parse({
       query: { from: '2026-01-01T10:30', to: '2026-01-02T00:00:00.5' },
     });
-    expect(parsed.query.from).toBe('2026-01-01T10:30:00.000Z');
-    expect(parsed.query.to).toBe('2026-01-02T00:00:00.500Z');
+    expect(parsed.query.from).toBe('2026-01-01T08:30:00.000Z');
+    expect(parsed.query.to).toBe('2026-01-01T22:00:00.500Z');
+  });
+
+  // Day boundaries are Kyiv's: an order placed at 00:30 in Kyiv belongs to the
+  // day the clock in Kyiv showed, in winter (UTC+2) and in summer (UTC+3).
+  it('cuts a day at Kyiv midnight, summer time included', () => {
+    const winter = salesSummarySchema.parse({ query: { from: '2026-03-11', to: '2026-03-12' } });
+    const halfPastMidnightInWinter = Date.parse('2026-03-10T22:30:00.000Z');
+    expect(winter.query.from).toBe('2026-03-10T22:00:00.000Z');
+    expect(winter.query.to).toBe('2026-03-11T22:00:00.000Z');
+    expect(halfPastMidnightInWinter).toBeGreaterThanOrEqual(Date.parse(winter.query.from));
+    expect(halfPastMidnightInWinter).toBeLessThan(Date.parse(winter.query.to));
+
+    const summer = salesSummarySchema.parse({ query: { from: '2026-07-11', to: '2026-07-12' } });
+    const halfPastMidnightInSummer = Date.parse('2026-07-10T21:30:00.000Z');
+    expect(summer.query.from).toBe('2026-07-10T21:00:00.000Z');
+    expect(summer.query.to).toBe('2026-07-11T21:00:00.000Z');
+    expect(halfPastMidnightInSummer).toBeGreaterThanOrEqual(Date.parse(summer.query.from));
+
+    // The day before ends where this one starts, so the order is not in it.
+    const dayBefore = salesSummarySchema.parse({ query: { from: '2026-03-10', to: '2026-03-11' } });
+    expect(halfPastMidnightInWinter).toBeGreaterThanOrEqual(Date.parse(dayBefore.query.to));
+  });
+
+  // The day the clocks go forward is 23 hours long, the day they go back 25.
+  it('gives the days of a clock change their real length', () => {
+    const spring = salesSummarySchema.parse({ query: { from: '2026-03-29', to: '2026-03-30' } });
+    expect(spring.query.from).toBe('2026-03-28T22:00:00.000Z');
+    expect(spring.query.to).toBe('2026-03-29T21:00:00.000Z');
+
+    const autumn = salesSummarySchema.parse({ query: { from: '2026-10-25', to: '2026-10-26' } });
+    expect(autumn.query.from).toBe('2026-10-24T21:00:00.000Z');
+    expect(autumn.query.to).toBe('2026-10-25T22:00:00.000Z');
   });
 
   it('honours an explicit offset and truncates below the millisecond', () => {

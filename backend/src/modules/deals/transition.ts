@@ -25,6 +25,23 @@ export const assertDealStageTransition = (from: DealStage, to: DealStage): void 
   }
 };
 
+/**
+ * A stage the pipeline never leaves. Derived from the transition table rather
+ * than listed, so a stage that gains a way out stops being final by itself.
+ */
+export const isFinalDealStage = (stage: DealStage): boolean =>
+  dealState(stage).allowedTransitions.length === 0;
+
+/**
+ * A closed deal is a record of what happened, not an estimate any more: its
+ * amount, currency and dates are what the reports already counted. Editing it
+ * would rewrite history, so the fields are frozen once the deal is won or lost.
+ */
+export const assertDealEditable = (stage: DealStage): void => {
+  if (!isFinalDealStage(stage)) return;
+  throw new AppError('A closed deal cannot be edited', 409, 'DEAL_CLOSED', { stage });
+};
+
 export const assertDealProbability = (stage: DealStage, probability: number): void => {
   if (!Number.isInteger(probability) || probability < 0 || probability > 100) {
     throw new AppError(

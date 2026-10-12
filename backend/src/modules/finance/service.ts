@@ -10,7 +10,7 @@ import {
 import type { Prisma, PrismaDatabase, PrismaTransaction } from '../../db/prisma.js';
 import type { AuditService } from '../audit/service.js';
 import type { OrderStatus } from '../orders/types.js';
-import { DEFAULT_REPORT_WINDOW_FROM, defaultReportWindowTo } from '../../common/reporting/index.js';
+import { DEFAULT_KYIV_WINDOW_FROM, defaultKyivWindowTo } from '../analytics/kyiv-time.js';
 import {
   MATCHABLE_ORDER_STATUSES,
   amountsAgree,
@@ -85,6 +85,11 @@ interface CandidateOrderRecord {
     readonly lastName: string;
     readonly company: string | null;
   } | null;
+}
+
+/** The order a person names by hand, with the payment that already settles it, if any. */
+interface ManualMatchOrderRecord extends CandidateOrderRecord {
+  readonly bankTransaction?: { readonly id: string } | null;
 }
 
 /**
@@ -178,6 +183,7 @@ const transactionSelection = {
   matchedOrderId: true,
   matchedAt: true,
   matchedById: true,
+  autoMatchDisabled: true,
   version: true,
   createdAt: true,
   updatedAt: true,
@@ -192,6 +198,15 @@ const candidateOrderSelection = {
   contactId: true,
   placedAt: true,
   contact: { select: { firstName: true, lastName: true, company: true } },
+};
+
+/**
+ * What a manual match reads about the order it names: what a candidate
+ * carries, and whether some payment already settles it.
+ */
+const manualMatchOrderSelection = {
+  ...candidateOrderSelection,
+  bankTransaction: { select: { id: true } },
 };
 
 /**
@@ -241,6 +256,7 @@ const toTransactionDto = (transaction: BankTransactionRecord): BankTransactionDt
   matchedOrderId: transaction.matchedOrderId,
   matchedAt: transaction.matchedAt,
   matchedById: transaction.matchedById,
+  autoMatchDisabled: transaction.autoMatchDisabled,
   version: transaction.version,
   createdAt: transaction.createdAt,
   updatedAt: transaction.updatedAt,
@@ -283,6 +299,7 @@ const toCandidateOrder = (order: CandidateOrderRecord): CandidateOrder => ({
   orderNumber: order.orderNumber,
   status: order.status,
   total: normalizeMoney(order.total.toString()),
+  currency: order.currency,
   placedAt: order.placedAt,
   contactName: contactNameOf(order),
   contactCompany: order.contact?.company ?? null,
@@ -302,6 +319,16 @@ const isRecordNotFoundError = (error: unknown): boolean =>
 
 const isUniqueConstraintError = (error: unknown): boolean =>
   typeof error === 'object' && error !== null && 'code' in error && error.code === 'P2002';
+
+/**
+ * An order is settled by at most one payment. Raised both when the check
+ * before the write finds the order taken and when the unique index on
+ * `matched_order_id` catches a concurrent request the check could not see.
+ */
+const orderAlreadyMatched = (orderId: string): AppError =>
+  new AppError('The order is already settled by another payment', 409, 'ORDER_ALREADY_MATCHED', {
+    orderId,
+  });
 
 const concurrentModification = (): AppError =>
   new AppError(
@@ -387,8 +414,8 @@ export const createFinanceService = (
   const resolveSummaryWindow = (
     query: FinanceSummaryQuery,
   ): { readonly from: string; readonly to: string } => ({
-    from: query.from ?? DEFAULT_REPORT_WINDOW_FROM,
-    to: query.to ?? defaultReportWindowTo(),
+    from: query.from ?? DEFAULT_KYIV_WINDOW_FROM,
+    to: query.to ?? defaultKyivWindowTo(),
   });
 
   const loadCandidateOrders = async (
@@ -405,6 +432,9 @@ export const createFinanceService = (
         deletedAt: null,
         status: { in: [...MATCHABLE_ORDER_STATUSES] },
         placedAt: { gte: window.from, lte: window.to },
+        // An order is settled by at most one payment: one that already has
+        // its payment is neither offered nor matched again.
+        bankTransaction: { is: null },
       },
       select: candidateOrderSelection,
       orderBy: [{ placedAt: 'asc' }, { id: 'asc' }],
@@ -523,15 +553,16 @@ export const createFinanceService = (
 
   /**
    * The write half of one automatic match, kept apart from the rule so the
-   * rule stays a rule. Returns the two snapshots it recorded, or null when a
-   * concurrent writer got there first, which the batch treats as "not this
+   * rule stays a rule. Returns the two snapshots it recorded, or why it wrote
+   * nothing: the row moved under the batch, or a concurrent request settled
+   * the order with another payment first. The batch treats both as "not this
    * run" rather than as a fault.
    */
   const applyAutoMatch = async (
     access: FinanceAccess,
     transaction: BankTransactionDto,
     orderId: string,
-  ): Promise<MatchChange | null> => {
+  ): Promise<MatchChange | 'ROW_MOVED' | 'ORDER_TAKEN'> => {
     try {
       return await db.$transaction(async (tx) => {
         const updated = await tx.bankTransaction.update({
@@ -541,6 +572,7 @@ export const createFinanceService = (
             matchedOrderId: orderId,
             matchedById: access.actorId,
             matchedAt: new Date(),
+            autoMatchDisabled: false,
             version: { increment: 1 },
           },
           select: transactionSelection,
@@ -560,7 +592,10 @@ export const createFinanceService = (
       // A transaction somebody edited while the batch was thinking is left
       // alone and picked up by the next run; one moving row must not abandon
       // the rest of the statement.
-      if (isRecordNotFoundError(error)) return null;
+      if (isRecordNotFoundError(error)) return 'ROW_MOVED';
+      // The order was settled by another payment after the batch read the
+      // order book; the unique index on `matched_order_id` refused the second.
+      if (isUniqueConstraintError(error)) return 'ORDER_TAKEN';
       throw error;
     }
   };
@@ -683,12 +718,34 @@ export const createFinanceService = (
             'TRANSACTION_ALREADY_MATCHED',
           );
         }
-        const order = await transaction.order.findFirst({
+        // Only money coming in can settle an order. A person may overrule the
+        // rule's heuristics, but a payment we made is not a payment we got.
+        if (!isReconcilableDirection(existing.direction)) {
+          throw new AppError(
+            'Only an incoming payment can be matched to an order',
+            409,
+            'TRANSACTION_NOT_INCOMING',
+          );
+        }
+        const order: ManualMatchOrderRecord | null = await transaction.order.findFirst({
           where: { id: data.orderId, deletedAt: null },
-          select: candidateOrderSelection,
+          select: manualMatchOrderSelection,
         });
         if (!order) {
           throw new AppError('Order not found', 404, 'TRANSACTION_ORDER_NOT_FOUND');
+        }
+        // This transaction is not matched (checked above), so a payment that
+        // already settles the order is necessarily another one.
+        if (order.bankTransaction) throw orderAlreadyMatched(order.id);
+        // Amounts in two currencies cannot settle each other, however close
+        // the numbers happen to be, so the currency is compared first.
+        if (existing.currency !== order.currency) {
+          throw new AppError(
+            'The transaction currency does not match the order currency',
+            422,
+            'CURRENCY_MISMATCH',
+            { currency: existing.currency, orderCurrency: order.currency },
+          );
         }
         const amount = normalizeMoney(existing.amount.toString());
         const total = normalizeMoney(order.total.toString());
@@ -716,12 +773,18 @@ export const createFinanceService = (
               matchedOrderId: data.orderId,
               matchedById: access.actorId,
               matchedAt,
+              // A person matching by hand has made the decision the flag was
+              // protecting; the automatic rule may look at the row again.
+              autoMatchDisabled: false,
               version: { increment: 1 },
             },
             select: transactionSelection,
           });
         } catch (error) {
           if (isRecordNotFoundError(error)) throw concurrentModification();
+          // Another request settled the order between the check above and
+          // this write; the unique index is what saw it.
+          if (isUniqueConstraintError(error)) throw orderAlreadyMatched(data.orderId);
           throw error;
         }
         const before = toTransactionDto(existing);
@@ -771,6 +834,9 @@ export const createFinanceService = (
               matchedOrderId: null,
               matchedById: null,
               matchedAt: null,
+              // A person took the match back; the next automatic run must not
+              // quietly put it back. Only another manual match clears this.
+              autoMatchDisabled: true,
               version: { increment: 1 },
             },
             select: transactionSelection,
@@ -805,11 +871,13 @@ export const createFinanceService = (
 
     async reconcile(access) {
       // Matched transactions are settled and ignored ones were settled by a
-      // person saying "leave this alone"; neither is reconsidered. Outgoing
+      // person saying "leave this alone"; neither is reconsidered. Nor is a
+      // line a person took a match back from: that was a decision too, and a
+      // batch that quietly re-made the match would overrule it. Outgoing
       // lines are read in with the rest: they cannot be matched, but they can
       // be filed, and filing them is what makes IGNORED reachable at all.
       const pending = await db.bankTransaction.findMany({
-        where: { matchStatus: { in: ['UNMATCHED', 'SUGGESTED'] } },
+        where: { matchStatus: { in: ['UNMATCHED', 'SUGGESTED'] }, autoMatchDisabled: false },
         select: transactionSelection,
         orderBy: [{ bookedAt: 'asc' }, { id: 'asc' }],
         take: RECONCILE_BATCH_SIZE,
@@ -826,7 +894,10 @@ export const createFinanceService = (
         MATCHED: 0,
         IGNORED: 0,
       };
-      const matched: MatchChange[] = [];
+      // Orders this run has already settled. The order book was read once,
+      // before the first write, so without this a second payment for the same
+      // sum would be matched to the very order the first one just closed.
+      const settled = new Set<string>();
 
       // The tally counts what was filed, not what was concluded. A row that a
       // person moved while the batch was thinking keeps whatever they made of
@@ -834,32 +905,35 @@ export const createFinanceService = (
       // report saying "matched: 2" over one write would be claiming a
       // settlement the ledger does not hold.
       for (const transaction of transactions) {
+        const open = orders.filter((order) => !settled.has(order.orderId));
         const outcome = isReconcilableDirection(transaction.direction)
-          ? matchOutcomeFor(findMatchCandidates(transaction, orders))
+          ? matchOutcomeFor(findMatchCandidates(transaction, open))
           : ({ matchStatus: 'IGNORED', matchedOrderId: null } as const);
         if (outcome.matchStatus === 'MATCHED' && outcome.matchedOrderId !== null) {
-          const change = await applyAutoMatch(access, transaction, outcome.matchedOrderId);
-          if (change === null) continue;
-          matched.push(change);
+          const result = await applyAutoMatch(access, transaction, outcome.matchedOrderId);
+          if (result === 'ROW_MOVED') continue;
+          settled.add(outcome.matchedOrderId);
+          if (result === 'ORDER_TAKEN') continue;
           tally.MATCHED += 1;
+          // Each match is its own committed transaction, so it is announced
+          // as soon as that commit is behind it — not at the end of the loop,
+          // where a later row failing would leave committed matches unheard.
+          // The same two snapshots a manual match announces, so a consumer of
+          // the stream cannot tell — and need not care — which of the two
+          // decided.
+          announce({
+            eventType: 'transaction.matched',
+            entityType: 'transaction',
+            entityId: result.after.id,
+            actorId: access.actorId,
+            payload: result,
+          });
           continue;
         }
         const filed =
           transaction.matchStatus === outcome.matchStatus ||
           (await applyStatus(transaction, outcome.matchStatus));
         if (filed) tally[outcome.matchStatus] += 1;
-      }
-
-      // The same two snapshots a manual match announces, so a consumer of the
-      // stream cannot tell — and need not care — which of the two decided.
-      for (const change of matched) {
-        announce({
-          eventType: 'transaction.matched',
-          entityType: 'transaction',
-          entityId: change.after.id,
-          actorId: access.actorId,
-          payload: change,
-        });
       }
 
       return {

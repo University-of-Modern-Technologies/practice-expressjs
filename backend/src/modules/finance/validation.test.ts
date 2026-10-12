@@ -1,6 +1,6 @@
 import { describe, expect, it } from '@jest/globals';
 
-import { DEFAULT_REPORT_WINDOW_FROM, defaultReportWindowTo } from '../../common/reporting/index.js';
+import { DEFAULT_KYIV_WINDOW_FROM, defaultKyivWindowTo } from '../analytics/kyiv-time.js';
 import {
   MAX_SUMMARY_RANGE_DAYS,
   financeSummarySchema,
@@ -122,12 +122,12 @@ describe('matching validation', () => {
 describe('summary validation', () => {
   // Each bound defaults on its own, from the shared reporting window, before
   // anything is checked — the way the analytics reports resolve theirs.
-  it('fills a request that names no window from the shared default', () => {
+  it('fills a request that names no window from the default, on the Kyiv calendar', () => {
     const parsed = financeSummarySchema.safeParse({ query: {} });
     expect(parsed.success).toBe(true);
     if (!parsed.success) return;
-    expect(parsed.data.query.from).toBe(DEFAULT_REPORT_WINDOW_FROM);
-    expect(parsed.data.query.to).toBe(defaultReportWindowTo());
+    expect(parsed.data.query.from).toBe(DEFAULT_KYIV_WINDOW_FROM);
+    expect(parsed.data.query.to).toBe(defaultKyivWindowTo());
   });
 
   it('still checks a window the caller did name', () => {
@@ -171,13 +171,14 @@ describe('summary validation', () => {
   });
 
   // The bounds are read by the same rule as the analytics reports.
-  it('reads a bound without a zone as UTC and refuses what is not a date', () => {
+  it('reads a bound without a zone on the Kyiv clock and refuses what is not a date', () => {
     const parsed = financeSummarySchema.safeParse({
       query: { from: '2026-03-01T10:30', to: '2026-04-01' },
     });
+    // UTC+2 on 1 March, UTC+3 on 1 April: the clocks moved in between.
     expect(parsed.success && parsed.data.query).toEqual({
-      from: '2026-03-01T10:30:00.000Z',
-      to: '2026-04-01T00:00:00.000Z',
+      from: '2026-03-01T08:30:00.000Z',
+      to: '2026-03-31T21:00:00.000Z',
     });
     for (const junk of ['1', '2026-02-31', '2026-03-01 10:30', 'March 1, 2026']) {
       expect(financeSummarySchema.safeParse({ query: { from: junk } }).success).toBe(false);
@@ -187,14 +188,29 @@ describe('summary validation', () => {
 
 describe('booking window validation', () => {
   // The ledger's bounds follow the same rule as every report bound.
-  it('reads a booking bound without a zone as UTC', () => {
+  it('reads a booking bound without a zone on the Kyiv clock', () => {
     const parsed = listTransactionsSchema.safeParse({
       query: { bookedFrom: '2026-01-05', bookedTo: '2026-01-06T12:00:00+02:00' },
     });
     expect(parsed.success && parsed.data.query).toMatchObject({
-      bookedFrom: '2026-01-05T00:00:00.000Z',
+      bookedFrom: '2026-01-04T22:00:00.000Z',
       bookedTo: '2026-01-06T10:00:00.000Z',
     });
+  });
+
+  // A day of the ledger is a Kyiv day: a payment booked at 00:30 in Kyiv is in
+  // the day the bank's customer saw on the clock, not in the one before.
+  it('puts a payment booked at half past midnight in Kyiv into that day', () => {
+    const parsed = listTransactionsSchema.safeParse({
+      query: { bookedFrom: '2026-03-11', bookedTo: '2026-03-12' },
+    });
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) return;
+    const booked = Date.parse('2026-03-10T22:30:00.000Z');
+    const { bookedFrom, bookedTo } = parsed.data.query;
+    expect(bookedFrom).toBe('2026-03-10T22:00:00.000Z');
+    expect(booked).toBeGreaterThanOrEqual(Date.parse(bookedFrom ?? ''));
+    expect(booked).toBeLessThan(Date.parse(bookedTo ?? ''));
   });
 
   it('refuses a booking bound that is not a date', () => {

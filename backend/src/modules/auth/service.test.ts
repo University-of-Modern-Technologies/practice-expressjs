@@ -9,7 +9,7 @@ import {
   splitRefreshToken,
   type AuthDatabase,
 } from './service.js';
-import type { AuthConfig } from './types.js';
+import type { AuthConfig, SessionRevocationListener } from './types.js';
 import { loginSchema } from './validation.js';
 
 const config: AuthConfig = {
@@ -110,17 +110,87 @@ describe('auth service', () => {
   });
 
   it('revokes the matching session on logout', async () => {
+    const tokenHash = await bcrypt.hash('secret', 4);
     const updateMany = jest.fn(async (_args: unknown) => ({ count: 1 }));
     const db = {
       user: { findUnique: jest.fn() },
-      session: { create: jest.fn(), findUnique: jest.fn(), update: jest.fn(), updateMany },
+      session: {
+        create: jest.fn(),
+        findUnique: jest.fn(async () => liveSession(tokenHash)),
+        update: jest.fn(),
+        updateMany,
+      },
     } as unknown as AuthDatabase;
 
     await createAuthService(db, config).logout(`${sessionId}.secret`);
 
     expect(updateMany).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { id: sessionId, revokedAt: null } }),
+      expect.objectContaining({ where: { id: sessionId, tokenHash, revokedAt: null } }),
     );
+  });
+});
+
+// The session id alone is not a secret; only the whole refresh token ends a session.
+describe('logout', () => {
+  const recordingListener = () => {
+    const ended: string[] = [];
+    const sessions: SessionRevocationListener = {
+      sessionsRevoked: (sessionIds) => {
+        ended.push(...sessionIds);
+      },
+      userSessionsRevoked: () => undefined,
+    };
+    return { ended, sessions };
+  };
+
+  const logoutDatabase = (session: ReturnType<typeof liveSession> | null) => {
+    const updateMany = jest.fn(async (_args: unknown) => ({ count: 1 }));
+    const db = {
+      user: { findUnique: jest.fn() },
+      session: { create: jest.fn(), findUnique: jest.fn(async () => session), updateMany },
+    } as unknown as AuthDatabase;
+    return { db, updateMany };
+  };
+
+  it('revokes nothing when the secret does not match', async () => {
+    const { db, updateMany } = logoutDatabase(liveSession(await bcrypt.hash('the-secret', 4)));
+    const { ended, sessions } = recordingListener();
+
+    await expect(
+      createAuthService(db, config, sessions).logout(`${sessionId}.guessed`),
+    ).resolves.toBeUndefined();
+
+    expect(updateMany).not.toHaveBeenCalled();
+    expect(ended).toEqual([]);
+  });
+
+  it('spends the same digest check on a session that does not exist', async () => {
+    const { db, updateMany } = logoutDatabase(null);
+    const compare = jest.spyOn(bcrypt, 'compare');
+
+    await expect(createAuthService(db, config).logout(`${sessionId}.any`)).resolves.toBeUndefined();
+
+    expect(compare).toHaveBeenCalledWith('any', DUMMY_PASSWORD_HASH);
+    expect(updateMany).not.toHaveBeenCalled();
+  });
+
+  it('closes the realtime sockets of the session it ended', async () => {
+    const { db } = logoutDatabase(liveSession(await bcrypt.hash('the-secret', 4)));
+    const { ended, sessions } = recordingListener();
+
+    await createAuthService(db, config, sessions).logout(`${sessionId}.the-secret`);
+
+    expect(ended).toEqual([sessionId]);
+  });
+
+  it('says nothing when a concurrent refresh rotated the secret first', async () => {
+    const { db, updateMany } = logoutDatabase(liveSession(await bcrypt.hash('the-secret', 4)));
+    updateMany.mockResolvedValueOnce({ count: 0 });
+    const { ended, sessions } = recordingListener();
+
+    await createAuthService(db, config, sessions).logout(`${sessionId}.the-secret`);
+
+    expect(ended).toEqual([]);
   });
 });
 
@@ -361,5 +431,35 @@ describe('session client', () => {
   it('cuts a long user agent to the column width', () => {
     expect(sessionClientOf(undefined, 'x'.repeat(600)).userAgent).toBe('x'.repeat(512));
     expect(sessionClientOf(undefined, '').userAgent).toBeNull();
+  });
+});
+
+// The realtime gateway closes a socket when the token it was opened with runs out.
+describe('access token lifetime', () => {
+  const liveDatabase = () =>
+    ({
+      user: { findUnique: jest.fn(async () => ({ isActive: true })) },
+      session: { findUnique: jest.fn(async () => liveSession('')) },
+    }) as unknown as AuthDatabase;
+
+  it('reports when the verified token expires', async () => {
+    const token = accessToken();
+    const { exp } = jwt.decode(token) as { exp: number };
+
+    await expect(createAuthService(liveDatabase(), config).authenticate(token)).resolves.toEqual({
+      userId,
+      sessionId,
+      expiresAt: new Date(exp * 1000),
+    });
+  });
+
+  it('refuses a token that carries no expiry', async () => {
+    const token = jwt.sign({ type: 'access', sessionId }, config.accessTokenSecret, {
+      subject: userId,
+    });
+
+    await expect(
+      createAuthService(liveDatabase(), config).authenticate(token),
+    ).rejects.toMatchObject({ statusCode: 401, code: 'UNAUTHORIZED' });
   });
 });

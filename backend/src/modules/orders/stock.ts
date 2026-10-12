@@ -72,17 +72,36 @@ export interface OrderStockOperations {
 }
 
 /**
- * Resolves the warehouse an order draws on. An order carries no warehouse of
- * its own, so the choice is a deployment decision: the callback runs on the
- * order's transaction and returns the target warehouse id, or nothing at all
- * when none is configured.
+ * Resolves the warehouse a confirmation reserves in. The choice is a
+ * deployment decision: the callback runs on the order's transaction and
+ * returns the target warehouse id, or nothing at all when none is configured.
+ * The warehouse it names is written onto the order, and every later movement
+ * of that order goes to the same warehouse; the resolver is consulted again
+ * only for an order confirmed before the order kept its warehouse.
  */
 export type OrderWarehouseResolver = (
   transaction: PrismaTransaction,
 ) => Promise<string | null | undefined>;
 
+/** The organisation settings a new order is created with. */
+export interface OrderDefaults {
+  /** The organisation's single currency; an order in any other is refused. */
+  readonly currency: string;
+  /** Leads every generated order number, as in `ORD-20260101-ABC123`. */
+  readonly numberPrefix: string;
+}
+
+/**
+ * Reads the organisation settings an order depends on, on the order's own
+ * transaction. Optional: without it every order is in USD and numbered `ORD-`.
+ */
+export type OrderDefaultsResolver = (transaction: PrismaTransaction) => Promise<OrderDefaults>;
+
+export const FALLBACK_ORDER_DEFAULTS: OrderDefaults = { currency: 'USD', numberPrefix: 'ORD' };
+
 /** Everything the orders service needs to move stock, injected as one unit. */
 export interface OrdersStockPort {
   readonly operations: OrderStockOperations;
   readonly resolveWarehouseId: OrderWarehouseResolver;
+  readonly resolveOrderDefaults?: OrderDefaultsResolver | undefined;
 }

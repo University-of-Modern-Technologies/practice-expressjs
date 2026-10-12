@@ -1,3 +1,4 @@
+import { MAX_PAGE } from '../../common/query/pagination.js';
 import { z } from 'zod';
 
 import { stockMovementTypes } from './types.js';
@@ -15,7 +16,7 @@ const booleanFlag = z.union([
 ]);
 
 const pagination = {
-  page: z.coerce.number().int().min(1).default(1),
+  page: z.coerce.number().int().min(1).max(MAX_PAGE).default(1),
   pageSize: z.coerce.number().int().min(1).max(100).default(20),
 };
 

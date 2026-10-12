@@ -248,3 +248,120 @@ describe('deal owners and search', () => {
     expect(args.where.OR[0]?.title.contains).toBe('50\\%\\_off');
   });
 });
+
+describe('closed deals', () => {
+  it.each(['WON', 'LOST'] as const)(
+    'refuses to edit the fields of a %s deal and writes nothing',
+    async (stage) => {
+      const harness = createHarness(async () => updatedDeal);
+      harness.findFirst.mockImplementation(
+        async () =>
+          ({
+            ...activeDeal,
+            stage,
+            probability: stage === 'WON' ? 100 : 0,
+            closedAt: new Date('2026-01-03T00:00:00Z'),
+          }) as unknown as typeof activeDeal,
+      );
+
+      await expect(
+        harness.service.update(access, activeDeal.id, { version: 1, amount: '1.00' }),
+      ).rejects.toMatchObject({
+        statusCode: 409,
+        code: 'DEAL_CLOSED',
+        details: { stage },
+      } satisfies Partial<AppError>);
+      expect(harness.updateDeal).not.toHaveBeenCalled();
+      expect(harness.record).not.toHaveBeenCalled();
+      expect(harness.publish).not.toHaveBeenCalled();
+    },
+  );
+
+  it('still edits a deal that has not closed', async () => {
+    const harness = createHarness(async () => updatedDeal);
+    harness.findFirst.mockImplementation(
+      async () => ({ ...activeDeal, stage: 'PROPOSAL' }) as unknown as typeof activeDeal,
+    );
+
+    await expect(
+      harness.service.update(access, activeDeal.id, { version: 1, title: 'Renamed' }),
+    ).resolves.toMatchObject({ id: activeDeal.id });
+  });
+});
+
+describe('the organization currency', () => {
+  const withCurrency = (currency: string) => {
+    const harness = createHarness(async () => updatedDeal);
+    const create = jest.fn(async (args: { data: Record<string, unknown> }) => ({
+      ...activeDeal,
+      currency: args.data.currency as string,
+    }));
+    (harness.transaction.deal as { create?: unknown }).create = create;
+    const resolveOrganizationCurrency = jest.fn(async () => currency);
+    const service = createDealsService(
+      harness.db,
+      { record: harness.record } as unknown as AuditService,
+      { publish: harness.publish },
+      { resolveOrganizationCurrency },
+    );
+    return { ...harness, service, create, resolveOrganizationCurrency };
+  };
+
+  it('gives a new deal the organization currency when none is named', async () => {
+    const harness = withCurrency('EUR');
+
+    await expect(
+      harness.service.create(access, { title: 'X', amount: '10.00' }),
+    ).resolves.toMatchObject({ currency: 'EUR' });
+    expect(harness.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ currency: 'EUR' }) }),
+    );
+  });
+
+  it('refuses a new deal in another currency before writing anything', async () => {
+    const harness = withCurrency('EUR');
+
+    await expect(
+      harness.service.create(access, { title: 'X', amount: '10.00', currency: 'USD' }),
+    ).rejects.toMatchObject({
+      statusCode: 422,
+      code: 'CURRENCY_NOT_SUPPORTED',
+      details: { currency: 'USD', expected: 'EUR' },
+    } satisfies Partial<AppError>);
+    expect(harness.db.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('refuses to move an existing deal into another currency', async () => {
+    const harness = withCurrency('EUR');
+
+    await expect(
+      harness.service.update(access, activeDeal.id, { version: 1, currency: 'USD' }),
+    ).rejects.toMatchObject({ statusCode: 422, code: 'CURRENCY_NOT_SUPPORTED' });
+    expect(harness.updateDeal).not.toHaveBeenCalled();
+  });
+
+  it('falls back to USD until the organization setting is wired in', async () => {
+    const harness = createHarness(async () => updatedDeal);
+
+    await expect(
+      harness.service.create(access, { title: 'X', amount: '10.00', currency: 'EUR' }),
+    ).rejects.toMatchObject({ code: 'CURRENCY_NOT_SUPPORTED', details: { expected: 'USD' } });
+  });
+});
+
+describe('the expected close date', () => {
+  it('leaves the service as a calendar day, not as an instant', async () => {
+    const harness = createHarness(async () => updatedDeal);
+    const findOne = harness.db.deal.findFirst as unknown as jest.Mock<
+      (args: unknown) => Promise<unknown>
+    >;
+    findOne.mockImplementation(async () => ({
+      ...activeDeal,
+      expectedCloseDate: new Date('2026-12-31T00:00:00.000Z'),
+    }));
+
+    await expect(harness.service.getById(access, activeDeal.id)).resolves.toMatchObject({
+      expectedCloseDate: '2026-12-31',
+    });
+  });
+});
