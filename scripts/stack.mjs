@@ -381,27 +381,36 @@ const commands = {
   },
 
   test() {
+    ensureInstalled(backend);
+    ensureInstalled(frontend);
     run('npm', ['test'], { cwd: backend });
     run('npm', ['test'], { cwd: frontend });
   },
 
   // The API and web client jobs of CI; integration tests, the migrations check
   // and the image build run there as well (`test:integration`, `docker:build`).
+  // Both installs are checked up front, so a missing one fails before the
+  // minutes of backend checks rather than after them.
   check() {
+    ensureInstalled(backend);
+    ensureInstalled(frontend);
     commands['check:api']();
     commands['check:web']();
   },
 
   'check:api'() {
+    ensureInstalled(backend);
     run('npm', ['run', 'ci'], { cwd: backend });
   },
 
   'check:web'() {
+    ensureInstalled(frontend);
     run('npm', ['run', 'ci'], { cwd: frontend });
   },
 
   // Talks to the storage of `docker:db`; it never starts containers itself.
   'test:integration'() {
+    ensureInstalled(backend);
     run('npm', ['run', 'test:integration'], { cwd: backend });
   },
 };
