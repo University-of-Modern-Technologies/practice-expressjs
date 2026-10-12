@@ -4,7 +4,9 @@ COPY package.json package-lock.json ./
 # Neither the schema nor the Prisma runner is in this layer, so the postinstall
 # hook would have nothing to generate from. The build stage runs the generation
 # itself, once both are copied.
-RUN npm ci --ignore-scripts
+# The marker tells scripts/sync-dev-deps.sh which lock file the development
+# volume was filled from.
+RUN npm ci --ignore-scripts && cp package-lock.json node_modules/.installed-lock
 
 FROM dependencies AS build
 COPY tsconfig.json tsconfig.build.json ./

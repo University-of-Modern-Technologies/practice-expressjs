@@ -1,6 +1,6 @@
 import type { Request, RequestHandler } from 'express';
 
-import { AppError } from '../../common/errors/index.js';
+import { AppError, validationError } from '../../common/errors/index.js';
 import type { AuthContext } from '../../common/types/auth-context.js';
 import type { RbacService } from '../rbac/service.js';
 import type { PermissionScope } from '../rbac/types.js';
@@ -57,9 +57,6 @@ const accessFor = (request: Request, actorId: string, scope: PermissionScope): W
   ...(request.ip ? { ipAddress: request.ip } : {}),
 });
 
-const invalid = (details: unknown): AppError =>
-  new AppError('Invalid request', 400, 'VALIDATION_ERROR', details);
-
 export const createWarehouseController = (
   service: WarehouseService,
   rbac: RbacService,
@@ -77,21 +74,21 @@ export const createWarehouseController = (
   return {
     listWarehouses: async (request, response) => {
       const parsed = listWarehousesSchema.safeParse({ query: request.query });
-      if (!parsed.success) throw invalid(parsed.error.flatten());
+      if (!parsed.success) throw validationError(parsed.error.flatten());
       const access = await authorize(request, 'read');
       response.json({ data: await service.listWarehouses(access, parsed.data.query) });
     },
 
     getWarehouse: async (request, response) => {
       const parsed = getWarehouseSchema.safeParse({ params: request.params });
-      if (!parsed.success) throw invalid(parsed.error.flatten());
+      if (!parsed.success) throw validationError(parsed.error.flatten());
       const access = await authorize(request, 'read');
       response.json({ data: await service.getWarehouse(access, parsed.data.params.id) });
     },
 
     createWarehouse: async (request, response) => {
       const parsed = createWarehouseSchema.safeParse({ body: request.body });
-      if (!parsed.success) throw invalid(parsed.error.flatten());
+      if (!parsed.success) throw validationError(parsed.error.flatten());
       const access = await authorize(request, 'write');
       response.status(201).json({ data: await service.createWarehouse(access, parsed.data.body) });
     },
@@ -101,7 +98,7 @@ export const createWarehouseController = (
         params: request.params,
         body: request.body,
       });
-      if (!parsed.success) throw invalid(parsed.error.flatten());
+      if (!parsed.success) throw validationError(parsed.error.flatten());
       const access = await authorize(request, 'write');
       response.json({
         data: await service.updateWarehouse(access, parsed.data.params.id, parsed.data.body),
@@ -110,14 +107,14 @@ export const createWarehouseController = (
 
     listStock: async (request, response) => {
       const parsed = listStockSchema.safeParse({ query: request.query });
-      if (!parsed.success) throw invalid(parsed.error.flatten());
+      if (!parsed.success) throw validationError(parsed.error.flatten());
       const access = await authorize(request, 'read');
       response.json({ data: await service.listStock(access, parsed.data.query) });
     },
 
     getStock: async (request, response) => {
       const parsed = getStockSchema.safeParse({ params: request.params });
-      if (!parsed.success) throw invalid(parsed.error.flatten());
+      if (!parsed.success) throw validationError(parsed.error.flatten());
       const access = await authorize(request, 'read');
       response.json({
         data: await service.getStock(
@@ -130,42 +127,42 @@ export const createWarehouseController = (
 
     receive: async (request, response) => {
       const parsed = receiveStockSchema.safeParse({ body: request.body });
-      if (!parsed.success) throw invalid(parsed.error.flatten());
+      if (!parsed.success) throw validationError(parsed.error.flatten());
       const access = await authorize(request, 'write');
       response.json({ data: await service.receive(access, parsed.data.body) });
     },
 
     issue: async (request, response) => {
       const parsed = issueStockSchema.safeParse({ body: request.body });
-      if (!parsed.success) throw invalid(parsed.error.flatten());
+      if (!parsed.success) throw validationError(parsed.error.flatten());
       const access = await authorize(request, 'write');
       response.json({ data: await service.issue(access, parsed.data.body) });
     },
 
     reserve: async (request, response) => {
       const parsed = reserveStockSchema.safeParse({ body: request.body });
-      if (!parsed.success) throw invalid(parsed.error.flatten());
+      if (!parsed.success) throw validationError(parsed.error.flatten());
       const access = await authorize(request, 'write');
       response.json({ data: await service.reserve(access, parsed.data.body) });
     },
 
     release: async (request, response) => {
       const parsed = releaseStockSchema.safeParse({ body: request.body });
-      if (!parsed.success) throw invalid(parsed.error.flatten());
+      if (!parsed.success) throw validationError(parsed.error.flatten());
       const access = await authorize(request, 'write');
       response.json({ data: await service.release(access, parsed.data.body) });
     },
 
     adjust: async (request, response) => {
       const parsed = adjustStockSchema.safeParse({ body: request.body });
-      if (!parsed.success) throw invalid(parsed.error.flatten());
+      if (!parsed.success) throw validationError(parsed.error.flatten());
       const access = await authorize(request, 'write');
       response.json({ data: await service.adjust(access, parsed.data.body) });
     },
 
     listMovements: async (request, response) => {
       const parsed = listMovementsSchema.safeParse({ query: request.query });
-      if (!parsed.success) throw invalid(parsed.error.flatten());
+      if (!parsed.success) throw validationError(parsed.error.flatten());
       const access = await authorize(request, 'read');
       response.json({ data: await service.listMovements(access, parsed.data.query) });
     },

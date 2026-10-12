@@ -68,7 +68,12 @@ export const listStockSchema = z.object({
     ...pagination,
     warehouseId: uuid.optional(),
     productId: uuid.optional(),
-    lowStockThreshold: z.coerce.number().int().min(0).optional(),
+    lowStockThreshold: z.coerce
+      .number()
+      .int()
+      .min(0)
+      .optional()
+      .meta({ description: 'Залишає лише позиції, де залишок не перевищує це значення.' }),
   }),
 });
 
@@ -124,7 +129,8 @@ export const adjustStockSchema = z.object({
     delta: z.coerce
       .number()
       .int()
-      .refine((value) => value !== 0, { message: 'delta must not be zero' }),
+      .refine((value) => value !== 0, { message: 'delta must not be zero' })
+      .meta({ description: 'Знакова корекція; нуль не приймається.' }),
     // Deliberately not optional: an unexplained correction is not auditable.
     note,
     referenceType: referenceType.optional(),

@@ -1,5 +1,5 @@
 import type { Request, RequestHandler } from 'express';
-import { AppError } from '../../common/errors/index.js';
+import { AppError, validationError } from '../../common/errors/index.js';
 import type { AuthContext } from '../../common/types/auth-context.js';
 import type { RbacService } from '../rbac/service.js';
 import type { PermissionScope } from '../rbac/types.js';
@@ -42,16 +42,13 @@ const accessFor = (request: Request, actorId: string, scope: PermissionScope): P
   ...(request.ip ? { ipAddress: request.ip } : {}),
 });
 
-const invalid = (details: unknown): AppError =>
-  new AppError('Invalid request', 400, 'VALIDATION_ERROR', details);
-
 export const createProductsController = (
   service: ProductsService,
   rbac: RbacService,
 ): ProductsController => ({
   list: async (request, response) => {
     const parsed = listProductsSchema.safeParse({ query: request.query });
-    if (!parsed.success) throw invalid(parsed.error.flatten());
+    if (!parsed.success) throw validationError(parsed.error.flatten());
     const auth = getAuth(request);
     const scope = await getScope(rbac, auth.userId, 'read');
     response.json({
@@ -61,7 +58,7 @@ export const createProductsController = (
 
   getById: async (request, response) => {
     const parsed = getProductSchema.safeParse({ params: request.params });
-    if (!parsed.success) throw invalid(parsed.error.flatten());
+    if (!parsed.success) throw validationError(parsed.error.flatten());
     const auth = getAuth(request);
     const scope = await getScope(rbac, auth.userId, 'read');
     response.json({
@@ -71,7 +68,7 @@ export const createProductsController = (
 
   create: async (request, response) => {
     const parsed = createProductSchema.safeParse({ body: request.body });
-    if (!parsed.success) throw invalid(parsed.error.flatten());
+    if (!parsed.success) throw validationError(parsed.error.flatten());
     const auth = getAuth(request);
     const scope = await getScope(rbac, auth.userId, 'write');
     response.status(201).json({
@@ -81,7 +78,7 @@ export const createProductsController = (
 
   update: async (request, response) => {
     const parsed = updateProductSchema.safeParse({ params: request.params, body: request.body });
-    if (!parsed.success) throw invalid(parsed.error.flatten());
+    if (!parsed.success) throw validationError(parsed.error.flatten());
     const auth = getAuth(request);
     const scope = await getScope(rbac, auth.userId, 'write');
     response.json({
@@ -95,7 +92,7 @@ export const createProductsController = (
 
   delete: async (request, response) => {
     const parsed = deleteProductSchema.safeParse({ params: request.params, query: request.query });
-    if (!parsed.success) throw invalid(parsed.error.flatten());
+    if (!parsed.success) throw validationError(parsed.error.flatten());
     const auth = getAuth(request);
     const scope = await getScope(rbac, auth.userId, 'delete');
     await service.delete(

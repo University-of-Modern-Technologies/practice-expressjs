@@ -65,6 +65,7 @@ export const createOrderSchema = z.object({
         (items) => new Set(items.map((item) => item.productId)).size === items.length,
         'Each product may appear on an order only once',
       )
+      .meta({ description: 'Кожен товар може зустрічатися в замовленні лише раз.' })
       .optional(),
   }),
 });
