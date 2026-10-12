@@ -18,7 +18,7 @@ export const createRedisClient = (config: AppConfig, logger: Logger): Redis => {
   // Unit tests build the whole application graph without infrastructure, so the
   // socket is opened on first use there instead of at construction time. That
   // keeps suites free of background reconnect timers that would outlive them.
-  const isTest = config.nodeEnv === 'test';
+  const isTest = config.appEnv === 'test';
 
   const client = new Redis(config.redisUrl, {
     keyPrefix: config.redisKeyPrefix,

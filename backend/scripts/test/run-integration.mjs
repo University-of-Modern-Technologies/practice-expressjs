@@ -4,11 +4,22 @@ import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import process from 'node:process';
-import { fileURLToPath, URL } from 'node:url';
+import { fileURLToPath } from 'node:url';
+
+import { loadEnv } from '../../src/config/load-env.cjs';
+import {
+  databaseName,
+  integrationTestEnv,
+  maintenanceDatabaseUrl,
+  storageAddress,
+} from '../../src/test/integration-env.cjs';
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const require = createRequire(import.meta.url);
-const safeDatabaseName = /(^|[-_])(test|testing)([-_]|$)/i;
+const startStorageHint = 'Start the storage from the repository root: npm run start:infra';
+// Long enough for a storage that is up, short enough not to keep a student
+// waiting on one that is not.
+const responseTimeoutMs = 3_000;
 // Read from disk rather than kept by hand: a suite that is written but not
 // listed does not fail, it simply never runs, and the summary says nothing
 // about it. The directory is the list.
@@ -19,66 +30,139 @@ const suites = fs
   .sort()
   .map((name) => `${suiteDirectory}/${name}`);
 
-const commandExample = [
-  "$env:RUN_DB_TESTS = 'true'",
-  "$env:DATABASE_URL_TEST = 'postgresql://postgres:postgres@localhost:5432/practice_crm_test?schema=public'",
-  'node .\\scripts\\test\\run-integration.mjs',
-].join('\n');
+/** The first meaningful line: driver errors carry a paragraph of advice after it. */
+const reasonOf = (error) =>
+  String(error instanceof Error ? error.message : error)
+    .split('\n')
+    .map((line) => line.trim())
+    .find((line) => line && !line.startsWith('Invalid `')) ?? 'no response';
 
-if (process.env.RUN_DB_TESTS !== 'true') {
-  console.log('Database integration tests skipped because RUN_DB_TESTS is not true.');
-  console.log('Run them from the project root with:');
-  console.log(commandExample);
-  process.exit(0);
+function fail(lines) {
+  console.error(`\n${lines.join('\n')}`);
+  process.exit(1);
 }
 
-const databaseUrl = process.env.DATABASE_URL_TEST;
-if (!databaseUrl) {
-  throw new Error(`DATABASE_URL_TEST is required when RUN_DB_TESTS=true.\n\n${commandExample}`);
+// The same layers the application reads, loaded into a copy: the working
+// addresses stay out of the run, only their parts are used.
+let testEnv;
+try {
+  testEnv = integrationTestEnv(loadEnv({ env: { ...process.env } }));
+} catch (error) {
+  fail([reasonOf(error)]);
 }
 
-const parsedDatabaseUrl = new URL(databaseUrl);
-if (!['postgres:', 'postgresql:'].includes(parsedDatabaseUrl.protocol)) {
-  throw new Error('DATABASE_URL_TEST must use the postgres or postgresql protocol.');
+const storages = [
+  {
+    name: 'PostgreSQL',
+    address: `${storageAddress(testEnv.DATABASE_URL)}/${databaseName(testEnv.DATABASE_URL)}`,
+    prepare: () => preparePostgres(testEnv.DATABASE_URL),
+  },
+  {
+    name: 'Redis',
+    address: `${storageAddress(testEnv.REDIS_URL)} (keys under ${testEnv.REDIS_KEY_PREFIX})`,
+    prepare: () => pingRedis(testEnv.REDIS_URL),
+  },
+  {
+    name: 'MongoDB',
+    address: `${storageAddress(testEnv.MONGODB_URL)}/${databaseName(testEnv.MONGODB_URL)}`,
+    prepare: () => pingMongo(testEnv.MONGODB_URL),
+  },
+];
+
+/**
+ * Reaches the test database and creates it when the server does not have it
+ * yet. Only then is the service database touched: a server that already holds
+ * the test database needs no rights beyond it.
+ */
+async function preparePostgres(databaseUrl) {
+  const { PrismaClient } = require('@prisma/client');
+  const connect = async (url) => {
+    const client = new PrismaClient({ datasourceUrl: url });
+    await client.$connect();
+    return client;
+  };
+
+  try {
+    await (await connect(databaseUrl)).$disconnect();
+    return;
+  } catch (error) {
+    // P1003: the server answered, the database does not exist.
+    if (error?.errorCode !== 'P1003') throw error;
+  }
+
+  const name = databaseName(databaseUrl);
+  const admin = await connect(maintenanceDatabaseUrl(databaseUrl));
+  try {
+    await admin.$executeRawUnsafe(`CREATE DATABASE "${name.replaceAll('"', '""')}"`);
+    console.log(`Created the test database "${name}".`);
+  } finally {
+    await admin.$disconnect();
+  }
 }
 
-const databaseName = decodeURIComponent(parsedDatabaseUrl.pathname.replace(/^\//, ''));
-if (!safeDatabaseName.test(databaseName)) {
-  throw new Error(
-    `Refusing to run database tests against "${databaseName}": the database name must contain a separate test or testing token.`,
-  );
+async function pingRedis(url) {
+  const { Redis } = require('ioredis');
+  const client = new Redis(url, {
+    lazyConnect: true,
+    connectTimeout: responseTimeoutMs,
+    enableOfflineQueue: false,
+    maxRetriesPerRequest: 0,
+    retryStrategy: () => null,
+  });
+  // `connect` rejects with a bare "Connection is closed."; the cause arrives
+  // as an error event, and without a listener it would go unhandled.
+  let cause;
+  client.on('error', (error) => {
+    cause = error;
+  });
+
+  try {
+    await client.connect();
+    await client.ping();
+  } catch (error) {
+    throw cause ?? error;
+  } finally {
+    client.disconnect();
+  }
 }
 
-const schema = parsedDatabaseUrl.searchParams.get('schema');
-if (schema && schema !== 'public') {
-  throw new Error(
-    'DATABASE_URL_TEST must use schema=public because the reset helper truncates public tables.',
-  );
+/** MongoDB creates the test database on the first write, so a ping is enough. */
+async function pingMongo(url) {
+  const mongoose = require('mongoose');
+  const connection = mongoose.createConnection(url, {
+    serverSelectionTimeoutMS: responseTimeoutMs,
+  });
+  connection.on('error', () => {});
+
+  try {
+    await connection.asPromise();
+    await connection.db.admin().ping();
+  } finally {
+    await connection.close().catch(() => {});
+  }
 }
 
-const redisUrl = process.env.REDIS_URL ?? 'redis://localhost:6379';
-const mongodbUrl =
-  process.env.MONGODB_URL ?? 'mongodb://localhost:27017/practice_events_test?authSource=admin';
+console.log('Integration tests use:');
+for (const storage of storages) console.log(`  ${storage.name.padEnd(10)} ${storage.address}`);
 
-const mongoDatabaseName = decodeURIComponent(new URL(mongodbUrl).pathname.replace(/^\//, ''));
-if (mongoDatabaseName && !safeDatabaseName.test(mongoDatabaseName)) {
-  throw new Error(
-    `Refusing to run event store tests against "${mongoDatabaseName}": the database name must contain a separate test or testing token.`,
-  );
+const results = await Promise.allSettled(storages.map((storage) => storage.prepare()));
+const failures = storages.flatMap((storage, index) => {
+  const result = results[index];
+  return result.status === 'rejected'
+    ? [`  ${storage.name} at ${storage.address}: ${reasonOf(result.reason)}`]
+    : [];
+});
+
+if (failures.length > 0) {
+  fail([
+    'Integration tests need PostgreSQL, Redis and MongoDB running. Not responding:',
+    ...failures,
+    '',
+    startStorageHint,
+  ]);
 }
 
-const childEnv = {
-  ...process.env,
-  NODE_ENV: 'test',
-  DATABASE_URL: databaseUrl,
-  REDIS_URL: redisUrl,
-  MONGODB_URL: mongodbUrl,
-  SEED_USER_PASSWORD: 'LocalTrainingOnly!2026',
-  JWT_ACCESS_SECRET: 'integration-access-secret-at-least-32-characters',
-  JWT_REFRESH_SECRET: 'integration-refresh-secret-at-least-32-characters',
-  LOG_LEVEL: 'silent',
-};
-
+const childEnv = { ...process.env, ...testEnv };
 const tsxCli = require.resolve('tsx/cli');
 const jestCli = require.resolve('jest/bin/jest');
 

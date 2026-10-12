@@ -2,7 +2,7 @@
  * Readiness probe execution.
  *
  * Every registered dependency check runs concurrently behind its own timeout so
- * that a single hanging dependency can never hold the `/health/ready` request
+ * that a single hanging dependency can never hold the `/api/health/ready` request
  * open. Failure details are returned to the caller for logging only; the HTTP
  * response deliberately exposes nothing but the status and the duration.
  */

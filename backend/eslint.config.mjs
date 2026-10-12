@@ -29,6 +29,17 @@ export default tseslint.config(
       ],
     },
   },
+  {
+    // The env loader stays plain CommonJS so the .mjs scripts can share it.
+    files: ['**/*.cjs'],
+    languageOptions: {
+      sourceType: 'commonjs',
+      globals: { __dirname: 'readonly', module: 'writable', require: 'readonly' },
+    },
+    rules: {
+      '@typescript-eslint/no-require-imports': 'off',
+    },
+  },
   ...scopeConfigs(tseslint.configs.strictTypeChecked),
   ...scopeConfigs(tseslint.configs.stylisticTypeChecked),
   {

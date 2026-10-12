@@ -106,11 +106,11 @@ describe('metrics router', () => {
     const registry = createMetricsRegistry();
     registry.counter({ name: 'jobs_total', help: 'Jobs.' }).inc();
     const app = express().use(
-      '/metrics',
+      '/api/metrics',
       createMetricsRouter({ registry, guard: allowAllMetricsGuard }),
     );
 
-    const response = await request(app).get('/metrics');
+    const response = await request(app).get('/api/metrics');
 
     expect(response.status).toBe(200);
     expect(response.headers['content-type']).toBe(PROMETHEUS_CONTENT_TYPE);
@@ -121,24 +121,24 @@ describe('metrics router', () => {
   it('hides the endpoint from unauthenticated scrapers', async () => {
     const registry = createMetricsRegistry();
     const app = express().use(
-      '/metrics',
+      '/api/metrics',
       createMetricsRouter({
         registry,
         guard: createBearerTokenMetricsGuard('a-sufficiently-long-token'),
       }),
     );
 
-    const anonymous = await request(app).get('/metrics');
+    const anonymous = await request(app).get('/api/metrics');
     expect(anonymous.status).toBe(404);
     expect(anonymous.text).toBe('');
 
     const wrongToken = await request(app)
-      .get('/metrics')
+      .get('/api/metrics')
       .set('authorization', 'Bearer not-the-right-token');
     expect(wrongToken.status).toBe(404);
 
     const authorised = await request(app)
-      .get('/metrics')
+      .get('/api/metrics')
       .set('authorization', 'Bearer a-sufficiently-long-token');
     expect(authorised.status).toBe(200);
   });

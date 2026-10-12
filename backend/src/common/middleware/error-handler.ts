@@ -34,7 +34,7 @@ export const createErrorHandler =
       error: {
         code: 'INTERNAL_SERVER_ERROR',
         message:
-          config.nodeEnv === 'production' && normalizedError instanceof Error
+          config.appEnv === 'production' && normalizedError instanceof Error
             ? 'Internal server error'
             : normalizedError instanceof Error
               ? normalizedError.message

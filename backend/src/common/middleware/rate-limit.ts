@@ -47,7 +47,7 @@ const createRateLimitMiddleware = (
     // Fail open: a Redis outage must degrade the limiter, not the API.
     passOnStoreError: true,
     // Automated tests must not share counters between cases.
-    skip: () => config.nodeEnv === 'test',
+    skip: () => config.appEnv === 'test',
     keyGenerator: (request: Request) =>
       request.auth?.userId ?? ipKeyGenerator(request.ip ?? 'unknown', IPV6_SUBNET),
     handler: (request: Request, _response: Response, next: NextFunction) => {

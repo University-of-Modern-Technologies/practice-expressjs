@@ -1,18 +1,57 @@
-# Database integration tests
+# Інтеграційні тести
 
-Integration suites exercise the real Express composition root against PostgreSQL. They are intentionally excluded from the default Jest match, so `npm test` does not require Docker or PostgreSQL.
+Наскрізні набори проганяють справжній composition root Express проти живих PostgreSQL, Redis і
+MongoDB. У `npm test` вони не входять: юніт-прогін сховищ не торкається й лише називає ці набори
+окремим рядком у кінці.
 
-The runner requires both safeguards:
+## Запуск
 
-- `RUN_DB_TESTS=true` explicitly enables destructive database setup;
-- `DATABASE_URL_TEST` must name a database containing a separate `test` or `testing` token and must use the `public` schema.
+Сховища піднімаються з кореня репозиторію, тести запускаються з `backend`:
 
-From `backend` in PowerShell:
-
-```powershell
-$env:RUN_DB_TESTS = 'true'
-$env:DATABASE_URL_TEST = 'postgresql://postgres:postgres@127.0.0.1:5432/practice_crm_test?schema=public'
-node .\scripts\test\run-integration.mjs
+```bash
+npm run start:infra       # у корені репозиторію: лише PostgreSQL, Redis і MongoDB
+npm run test:integration  # у backend
 ```
 
-The runner applies committed migrations once, then resets and seeds the test database before each suite. Never point `DATABASE_URL_TEST` at a development, staging, or production database.
+Сама команда `test:integration` і є згодою на руйнівне налаштування тестової бази — окремих
+прапорців не треба. Docker вона не запускає. Якщо якесь сховище не відповідає, команда
+завершується з ненульовим кодом, називає це сховище й адресу та підказує `npm run start:infra`.
+Код `0` означає одне: усі набори пройшли.
+
+## Звідки береться тестове оточення
+
+Окремого `.env` для тестів немає. Раннер читає ті самі файли, що й застосунок, — кореневий `.env` і
+`.env` бекенда — і бере з них частини адрес: хост, порт, користувача, пароль. Далі він сам виводить
+тестове оточення:
+
+| Що         | Значення в тестах                                                          |
+| ---------- | -------------------------------------------------------------------------- |
+| `APP_ENV`  | `test`                                                                     |
+| PostgreSQL | той самий сервер, база `${POSTGRES_DB}_test` (типово `practice_crm_test`)  |
+| MongoDB    | той самий сервер, база `${MONGO_DB}_test` (типово `practice_events_test`)  |
+| Redis      | той самий сервер, ключі з префіксом `crm-test:`                            |
+| Секрети    | фіксовані тестові JWT-секрети й `SEED_USER_PASSWORD`, а не ті, що в `.env` |
+
+Робочі `DATABASE_URL`, `REDIS_URL` і `MONGODB_URL`, навіть явно записані в `.env`, раннер не бере
+ніколи. Тестову базу PostgreSQL він створює сам, якщо її ще немає, — через службову базу `postgres`
+з тими самими обліковими даними. MongoDB створює базу сама під час першого запису.
+
+Явні тестові адреси мають пріоритет над зібраними — так їх задає CI:
+
+| Змінна              | Що перевизначає            |
+| ------------------- | -------------------------- |
+| `DATABASE_URL_TEST` | адресу тестової PostgreSQL |
+| `REDIS_URL_TEST`    | адресу Redis               |
+| `MONGODB_URL_TEST`  | адресу тестової MongoDB    |
+
+## Запобіжники
+
+- Назва бази PostgreSQL і MongoDB мусить містити окремий токен `test` або `testing`:
+  `practice_crm_test` проходить, `contest` — ні. Інакше раннер відмовляється працювати.
+- Адреса PostgreSQL мусить вести на схему `public`: помічник скидання очищає таблиці саме там.
+
+## Що робить прогін
+
+Раннер один раз застосовує закомічені міграції, а перед кожним набором скидає тестову базу й
+наповнює її заново. Набори беруться з цієї теки: новий файл `*.integration.test.ts` потрапляє в
+прогін сам.

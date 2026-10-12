@@ -7,9 +7,9 @@ import type { AppConfig } from '../config/env.js';
  * real dependency: unit tests mock every client built from them.
  */
 const baseTestConfig: AppConfig = {
-  nodeEnv: 'test',
+  appEnv: 'test',
   host: '127.0.0.1',
-  port: 3000,
+  port: 8000,
   logLevel: 'silent',
   corsOrigins: ['http://localhost:5173'],
   jsonBodyLimit: '1mb',

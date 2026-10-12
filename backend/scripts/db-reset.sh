@@ -18,13 +18,15 @@ require_command() {
   command -v "$1" >/dev/null 2>&1 || die "required command not found: $1"
 }
 
-# Reads a variable from .env without sourcing the file: values may contain
-# characters that sh would interpret.
+# Reads a variable from the backend .env, then from the shared one a level up,
+# without sourcing either: values may contain characters that sh would interpret.
 env_value() {
   value=$(
-    if [ -f "$PROJECT_ROOT/.env" ]; then
-      sed -n "s/^[[:space:]]*$1=//p" "$PROJECT_ROOT/.env" | tail -n 1
-    fi
+    for env_file in "$PROJECT_ROOT/.env" "$PROJECT_ROOT/../.env"; do
+      if [ -f "$env_file" ]; then
+        sed -n "s/^[[:space:]]*$1=//p" "$env_file" | tail -n 1
+      fi
+    done | head -n 1
   )
   value=${value%\"}
   value=${value#\"}
@@ -44,8 +46,9 @@ Options:
   -h, --help        Show this help.
 
 Safety:
-  Aborts when NODE_ENV=production. Credentials are taken from DATABASE_URL in
-  the environment or ./.env; nothing is hardcoded here.
+  Aborts when APP_ENV=production. The database is the one the application
+  would use: DATABASE_URL from the environment or ./.env, otherwise assembled
+  from the POSTGRES_* values in ./.env and ../.env; nothing is hardcoded here.
 USAGE
 }
 
@@ -70,10 +73,10 @@ done
 
 cd "$PROJECT_ROOT"
 
-node_env=${NODE_ENV:-$(env_value NODE_ENV development)}
+app_env=${APP_ENV:-${NODE_ENV:-$(env_value APP_ENV "$(env_value NODE_ENV development)")}}
 
-if [ "$node_env" = 'production' ]; then
-  die 'refusing to reset the database while NODE_ENV=production'
+if [ "$app_env" = 'production' ]; then
+  die 'refusing to reset the database while APP_ENV=production'
 fi
 
 require_command npm
@@ -82,12 +85,12 @@ if [ "$assume_yes" -eq 0 ]; then
   if [ ! -t 0 ]; then
     die 'confirmation required; re-run with --yes in a non-interactive shell'
   fi
-  printf 'This erases the "%s" database. Type "reset" to continue: ' "$node_env" >&2
+  printf 'This erases the "%s" database. Type "reset" to continue: ' "$app_env" >&2
   read -r confirmation
   [ "$confirmation" = 'reset' ] || die 'aborted'
 fi
 
-log "resetting the ${node_env} database"
+log "resetting the ${app_env} database"
 npm run prisma -- migrate reset --force --skip-seed --skip-generate
 
 log 'generating the Prisma client'

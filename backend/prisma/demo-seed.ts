@@ -15,13 +15,15 @@
  * roles are looked up by name rather than created here.
  */
 
-import 'dotenv/config';
-
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { Prisma, PrismaClient } from '@prisma/client';
 import { hash } from 'bcryptjs';
+
+import { loadEnv } from '../src/config/load-env.cjs';
+
+loadEnv();
 
 const prisma = new PrismaClient();
 
@@ -177,7 +179,7 @@ const at = (value: string | null): Date | null => (value === null ? null : new D
 
 function getSeedPassword(): string {
   // The production stack is a training stand, so it may be seeded on purpose.
-  if (process.env.NODE_ENV === 'production' && process.env.SEED_ALLOW_PRODUCTION !== 'true') {
+  if (process.env.APP_ENV === 'production' && process.env.SEED_ALLOW_PRODUCTION !== 'true') {
     throw new Error(
       'The demonstration seed runs in production only with SEED_ALLOW_PRODUCTION=true.',
     );

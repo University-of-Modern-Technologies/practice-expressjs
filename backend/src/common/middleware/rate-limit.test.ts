@@ -44,7 +44,7 @@ interface RateLimitOptions {
 }
 
 const baseConfig = {
-  nodeEnv: 'production',
+  appEnv: 'production',
   redisKeyPrefix: 'crm:',
   rateLimitWindowSeconds: 60,
   rateLimitMaxRequests: 300,
@@ -107,7 +107,7 @@ describe('rate limit middleware', () => {
     createRateLimiter(createRedis(), baseConfig, createLogger());
     expect(lastOptions().skip()).toBe(false);
 
-    createRateLimiter(createRedis(), { ...baseConfig, nodeEnv: 'test' }, createLogger());
+    createRateLimiter(createRedis(), { ...baseConfig, appEnv: 'test' }, createLogger());
     expect(lastOptions().skip()).toBe(true);
   });
 

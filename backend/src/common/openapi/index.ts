@@ -17,7 +17,7 @@ import { usersPaths } from './users.paths.js';
 import { warehousePaths } from './warehouse.paths.js';
 
 const healthPaths = {
-  '/health/live': {
+  '/api/health/live': {
     get: {
       tags: ['Health'],
       summary: 'Перевірити працездатність процесу',
@@ -37,7 +37,7 @@ const healthPaths = {
       },
     },
   },
-  '/health/ready': {
+  '/api/health/ready': {
     get: {
       tags: ['Health'],
       summary: 'Перевірити готовність приймати трафік',

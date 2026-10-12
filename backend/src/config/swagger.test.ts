@@ -61,8 +61,8 @@ describe('openApiDocument', () => {
   it('documents every mounted API path', () => {
     expect(Object.keys(paths)).toEqual(
       expect.arrayContaining([
-        '/health/live',
-        '/health/ready',
+        '/api/health/live',
+        '/api/health/ready',
         '/api/v1/auth/login',
         '/api/v1/auth/refresh',
         '/api/v1/auth/logout',

@@ -1,7 +1,9 @@
-import 'dotenv/config';
-
 import { DealStage, OrderStatus, PermissionScope, PrismaClient } from '@prisma/client';
 import { hash } from 'bcryptjs';
+
+import { loadEnv } from '../src/config/load-env.cjs';
+
+loadEnv();
 
 const prisma = new PrismaClient();
 
@@ -108,7 +110,7 @@ async function hashPassword(password: string): Promise<string> {
 
 function getSeedPassword(): string {
   // The production stack is a training stand, so it may be seeded on purpose.
-  if (process.env.NODE_ENV === 'production' && process.env.SEED_ALLOW_PRODUCTION !== 'true') {
+  if (process.env.APP_ENV === 'production' && process.env.SEED_ALLOW_PRODUCTION !== 'true') {
     throw new Error('The training seed runs in production only with SEED_ALLOW_PRODUCTION=true.');
   }
 

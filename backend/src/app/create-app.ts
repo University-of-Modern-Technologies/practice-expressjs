@@ -82,9 +82,9 @@ export const createApp = ({
   app.use(express.urlencoded({ extended: true, limit: config.jsonBodyLimit }));
   app.use(cookieParser());
 
-  app.use('/health', createHealthRouter(readinessChecks));
-  app.get('/openapi.json', (_request, response) => response.json(openApiDocument));
-  app.use('/docs', swaggerUi.serve, swaggerUi.setup(openApiDocument, { explorer: true }));
+  app.use('/api/health', createHealthRouter(readinessChecks));
+  app.get('/api/openapi.json', (_request, response) => response.json(openApiDocument));
+  app.use('/api/docs', swaggerUi.serve, swaggerUi.setup(openApiDocument, { explorer: true }));
 
   if (authRateLimiter) app.use(AUTH_PATH, authRateLimiter);
   if (cacheInvalidation) app.use(cacheInvalidation);
@@ -97,7 +97,7 @@ export const createApp = ({
     // Metrics expose internal topology, so the endpoint is never public: it is
     // mounted only when a scrape token is configured, and stays guarded by it.
     app.use(
-      '/metrics',
+      '/api/metrics',
       createMetricsRouter({
         registry: metrics,
         guard: createBearerTokenMetricsGuard(config.metricsToken),

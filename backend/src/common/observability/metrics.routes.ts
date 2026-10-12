@@ -66,7 +66,7 @@ export const createBearerTokenMetricsGuard = (token: string): RequestHandler => 
 
 /**
  * Serves the Prometheus text exposition format behind the injected guard.
- * Mount it with `app.use('/metrics', createMetricsRouter({ registry, guard }))`.
+ * Mount it with `app.use('/api/metrics', createMetricsRouter({ registry, guard }))`.
  */
 export const createMetricsRouter = ({ registry, guard }: MetricsRouterOptions): Router => {
   const router = Router();
